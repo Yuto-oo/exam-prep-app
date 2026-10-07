@@ -399,7 +399,6 @@ def show_quiz_page(q_data):
             or 'この問題の解説は現在準備中です。'
         )
         
-        # 💡 画像ポップオーバー追加部分
         col_title, col_btn = st.columns([3, 1])
         with col_title:
             st.markdown('#### 📖 解説')
@@ -505,18 +504,34 @@ def show_quiz_page(q_data):
                 st.session_state.current_index += 1
                 st.session_state.answered = False
                 st.session_state.is_over_time = False 
-                save_suspend_state_to_aws(st.session_state.user_name, st.session_state.exam_code, st.session_state.quiz_questions, st.session_state.current_index)
+                
+                # 💡 中断時に、現在の活動状態（activity_type等）もセットで保存する
+                save_suspend_state_to_aws(
+                    st.session_state.user_name, 
+                    st.session_state.exam_code, 
+                    st.session_state.quiz_questions, 
+                    st.session_state.current_index,
+                    st.session_state.get('activity_type', 'free_learning'),
+                    st.session_state.get('test_run_id', ''),
+                    st.session_state.get('test_set_id', ''),
+                    st.session_state.get('test_attempt_no', 1)
+                )
+                
                 st.session_state.suspended = True
                 st.session_state.saved_session = {
                     'exam_code': st.session_state.exam_code,
                     'q_keys': [{"year": str(q.get("year", "")), "id": int(q.get("id", 0))} for q in st.session_state.quiz_questions],
-                    'current_index': st.session_state.current_index
+                    'current_index': st.session_state.current_index,
+                    'activity_type': st.session_state.get('activity_type', 'free_learning'),
+                    'test_run_id': st.session_state.get('test_run_id', ''),
+                    'test_set_id': st.session_state.get('test_set_id', ''),
+                    'test_attempt_no': st.session_state.get('test_attempt_no', 1)
                 }
                 st.session_state.config_done = False
                 st.rerun()
                 
         with c_btn2:
-            if st.button('次の問題へ進む ➡️️', use_container_width=True, type='primary'):
+            if st.button('次の問題へ進む ➡', use_container_width=True, type='primary'):
                 st.session_state.answered = False
                 st.session_state.is_over_time = False 
                 st.session_state.current_index += 1
@@ -528,12 +543,28 @@ def show_quiz_page(q_data):
       if not hide_suspend_btn:
           st.write("---")
           if st.button("⏸️ クイズを中断して設定に戻る", use_container_width=True):
-              save_suspend_state_to_aws(st.session_state.user_name, st.session_state.exam_code, st.session_state.quiz_questions, st.session_state.current_index)
+              
+              # 💡 中断時に、現在の活動状態（activity_type等）もセットで保存する
+              save_suspend_state_to_aws(
+                  st.session_state.user_name, 
+                  st.session_state.exam_code, 
+                  st.session_state.quiz_questions, 
+                  st.session_state.current_index,
+                  st.session_state.get('activity_type', 'free_learning'),
+                  st.session_state.get('test_run_id', ''),
+                  st.session_state.get('test_set_id', ''),
+                  st.session_state.get('test_attempt_no', 1)
+              )
+              
               st.session_state.suspended = True
               st.session_state.saved_session = {
                   'exam_code': st.session_state.exam_code,
                   'q_keys': [{"year": str(q.get("year", "")), "id": int(q.get("id", 0))} for q in st.session_state.quiz_questions],
-                  'current_index': st.session_state.current_index
+                  'current_index': st.session_state.current_index,
+                  'activity_type': st.session_state.get('activity_type', 'free_learning'),
+                  'test_run_id': st.session_state.get('test_run_id', ''),
+                  'test_set_id': st.session_state.get('test_set_id', ''),
+                  'test_attempt_no': st.session_state.get('test_attempt_no', 1)
               }
               st.session_state.config_done = False
               st.rerun()

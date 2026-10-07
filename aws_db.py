@@ -33,14 +33,12 @@ def load_user_history_from_aws(username):
         items.sort(key=lambda x: x.get('timestamp', ''))
         
         for item in items:
-            # 💡 後方互換：属性が無い旧ログは 'free_learning' として扱う
             activity_type = item.get('activity_type', 'free_learning')
             time_taken = float(item.get('time_taken', 0.0))
             
-            # 💡 900秒以上でも履歴には反映し、時間分析への組み込みだけを制御する
             valid_for_time_analysis = item.get('valid_for_time_analysis')
             if valid_for_time_analysis is None:
-                is_time_valid = (time_taken < 900.0) # 旧ログ互換
+                is_time_valid = (time_taken < 900.0)
             else:
                 is_time_valid = bool(valid_for_time_analysis)
 
@@ -98,13 +96,12 @@ def load_global_statistics_from_aws(exam_code):
         questions_data = {}
         
         for item in items:
-            # 💡 後方互換対応と、900秒以上データの分離
             activity_type = item.get('activity_type', 'free_learning')
             time_taken = float(item.get('time_taken', 0.0))
             
             valid_for_time_analysis = item.get('valid_for_time_analysis')
             if valid_for_time_analysis is None:
-                is_time_valid = (time_taken < 900.0) # 旧ログ互換
+                is_time_valid = (time_taken < 900.0)
             else:
                 is_time_valid = bool(valid_for_time_analysis)
 
@@ -125,7 +122,6 @@ def load_global_statistics_from_aws(exam_code):
             for target_group in ["全体", lvl_group]:
                 if target_group not in levels_data: levels_data[target_group] = {}
                 if cat not in levels_data[target_group]: 
-                    # 💡 count(全体の件数)と、time_count(時間計算用の有効件数)を分離
                     levels_data[target_group][cat] = {'correct_sum': 0, 'time_sum': 0.0, 'count': 0, 'time_count': 0}
                 
                 levels_data[target_group][cat]['correct_sum'] += is_correct
@@ -136,7 +132,6 @@ def load_global_statistics_from_aws(exam_code):
                     levels_data[target_group][cat]['time_count'] += 1
 
             if q_key not in questions_data:
-                # 💡 total_count と time_count を分離
                 questions_data[q_key] = {
                     'total_count': 0, 'correct_count': 0, 'total_time': 0.0, 'time_count': 0, 'trick_count': 0,
                     'level_correct': {"初学者": 0, "中級者": 0, "上級者": 0, "その他": 0},
@@ -190,7 +185,6 @@ def load_global_statistics_from_aws(exam_code):
         st.warning(f"⚠️ 統計データの取得に失敗しました: {e}")
         return {"levels": {}, "questions": {}, "total_logs": 0}
 
-# 💡 研究用ログの追加属性を引数として受け取る
 def send_result_to_aws(q_data, selected_label, selected_text, is_correct, time_taken, confidence, metrics,
                        activity_type="free_learning", test_run_id="", test_set_id="", test_attempt_no=1,
                        raw_response_time=0.0, valid_for_time_analysis=True, time_exclusion_reason="",
@@ -221,7 +215,6 @@ def send_result_to_aws(q_data, selected_label, selected_text, is_correct, time_t
             'first_answer_time_sec': Decimal(str(metrics['first_time'])),
             'user_average_answer_time_sec': Decimal(str(metrics['avg_time'])),
             
-            # 💡 研究用追加属性
             'activity_type': str(activity_type),
             'test_run_id': str(test_run_id),
             'test_set_id': str(test_set_id),
@@ -232,7 +225,6 @@ def send_result_to_aws(q_data, selected_label, selected_text, is_correct, time_t
             'retention_model_version': str(retention_model_version)
         }
         
-        # 💡 初回答などで値がNoneの場合はDynamoDBへの保存エラーを避けるためキーを含めない
         if predicted_retention_before_answer is not None:
             item['predicted_retention_before_answer'] = Decimal(str(predicted_retention_before_answer))
             
@@ -241,7 +233,7 @@ def send_result_to_aws(q_data, selected_label, selected_text, is_correct, time_t
         st.error(f"🚨 AWS送信エラー: {e}")
 
 # --- セッション中断・再開用 ---
-def save_suspend_state_to_aws(username, exam_code, quiz_questions, current_index):
+def save_suspend_state_to_aws(username, exam_code, quiz_questions, current_index, activity_type="free_learning", test_run_id="", test_set_id="", test_attempt_no=1):
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table('Exam_Learning_Sessions')
@@ -252,7 +244,11 @@ def save_suspend_state_to_aws(username, exam_code, quiz_questions, current_index
             'exam_code': str(exam_code),
             'q_keys': q_keys,
             'current_index': int(current_index),
-            'is_suspended': True
+            'is_suspended': True,
+            'activity_type': str(activity_type),
+            'test_run_id': str(test_run_id),
+            'test_set_id': str(test_set_id),
+            'test_attempt_no': int(test_attempt_no)
         }
         table.put_item(Item=item)
     except Exception as e:
@@ -331,7 +327,6 @@ def load_global_bookmark_counts():
     except Exception:
         return {}
 
-# 💡 ユーザープロファイル管理用（update_itemへ変更）
 def load_user_profile(username):
     try:
         dynamodb = get_dynamodb_resource()
@@ -345,7 +340,6 @@ def save_user_profile(username, email, receive_notifications):
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table('Exam_Learning_Users')
-        # 💡 put_item（全置換）を避けて、指定項目だけを update_item する
         table.update_item(
             Key={'user_id': str(username)},
             UpdateExpression="SET email = :e, receive_notifications = :n, updated_at = :u",
@@ -358,13 +352,11 @@ def save_user_profile(username, email, receive_notifications):
     except Exception:
         pass
 
-# 💡 新規追加：初回確認テストの完了状態を保存
 def save_initial_check_completion(username, exam_code, result_dict):
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table('Exam_Learning_Users')
         
-        # 既存プロファイルの initial_checks を取得・更新
         profile = load_user_profile(username)
         initial_checks = profile.get("initial_checks", {})
         initial_checks[exam_code] = result_dict
@@ -380,19 +372,13 @@ def save_initial_check_completion(username, exam_code, result_dict):
     except Exception as e:
         st.error(f"完了状態の保存エラー: {e}")
 
-# 💡 新規追加：リマインド送信履歴の専用テーブル保存機能
 def save_reminder_log(log_data):
-    """
-    send_daily_reminders.py から呼び出され、
-    リマインド送信時のメタデータ（問題単位）を専用テーブルへ記録します。
-    """
     try:
         dynamodb = get_dynamodb_resource()
-        # 既存ログを汚染しないよう、完全に新しい専用テーブルを使用します
         table = dynamodb.Table('Exam_Learning_Reminder_Logs')
         
         item = {
-            'log_id': str(uuid.uuid4()), # 主キー
+            'log_id': str(uuid.uuid4()), 
             'user_id': str(log_data['user_id']),
             'sent_at': str(log_data['sent_at']),
             'exam_code': str(log_data['exam_code']),

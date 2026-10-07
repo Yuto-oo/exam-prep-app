@@ -15,7 +15,8 @@ from aws_db import (
     clear_suspend_state_in_aws,
     load_bookmarks_from_aws,
     load_user_profile,
-    save_user_profile
+    save_user_profile,
+    save_initial_check_completion  # 💡 追記
 )
 from dashboard import show_dashboard
 from quiz_page import show_quiz_page
@@ -64,7 +65,6 @@ def send_feedback_to_admin(user_id, issue_type, details, question_info=""):
             aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
         )
         
-        # 送信元・送信先ともにアプリのメアドを指定
         SENDER = "学習アプリ フィードバック機能 <exam.app.noreply@gmail.com>"
         RECEIVER = "exam.app.noreply@gmail.com"
         
@@ -239,6 +239,11 @@ def load_assessment_sets():
 
 questions = load_data(st.session_state.exam_code)
 
+# 💡 安全にログアウトを実行するためのコールバック関数
+def do_logout():
+    st.session_state.clear()
+
+
 # --- 👤 3. メインサイドバーメニュー ---
 st.sidebar.title(f"👤 メニュー")
 app_mode = st.sidebar.radio("📋 機能を切り替える", ["クイズ学習", "学習ダッシュボード"])
@@ -251,21 +256,18 @@ if st.session_state.user_name:
     current_email = st.session_state.get('email', '')
     current_notif = st.session_state.get('receive_notifications', True)
 
-    # 💡 状態だけを表示し、メアド自体は画面に出さない
     if current_email:
         st.sidebar.caption("現在の状態: **✅ アドレス登録済み**")
     else:
         st.sidebar.caption("現在の状態: **❌ アドレス未登録**")
 
     with st.sidebar.form("notification_form"):
-        # 💡 個人情報流出防止のため、登録済みのメアドは画面に出さず常に空欄（value=""）にする
         new_email = st.text_input("新しいメールアドレス（変更・登録時のみ入力）", value="")
         new_notif = st.checkbox("学習リマインド通知を受け取る", value=current_notif)
         
         submit_notif = st.form_submit_button("更新する")
 
     if submit_notif:
-        # 💡 入力が空欄のまま更新ボタンを押した場合は、データベースにある既存のメアドを維持する
         final_email = new_email.strip() if new_email.strip() else current_email
         st.session_state.email = final_email
         st.session_state.receive_notifications = new_notif
@@ -295,9 +297,9 @@ if st.session_state.user_name:
                     else:
                         st.error("送信に失敗しました。時間をおいて再度お試しください。")
 
-if st.sidebar.button("ログアウト"): 
-    st.session_state.clear()
-    st.rerun()
+# 💡 ログアウト時にエラーが起きないよう、on_clickで安全に状態をクリアする
+if st.sidebar.button("ログアウト", on_click=do_logout): 
+    pass
 
 
 # --- 📊 4. ダッシュボード表示モード ---
@@ -313,24 +315,40 @@ if not st.session_state.config_done:
     if st.button("🔄 前回の続きから", use_container_width=True):
         if st.session_state.suspended and st.session_state.saved_session:
             ss = st.session_state.saved_session
-            st.session_state.exam_code = ss['exam_code']
             
-            exam_options = {"FEA": "基本情報技術者試験A", "FEB": "基本情報技術者試験B", "IP": "ITパスポート"}
-            st.session_state.exam_name = exam_options.get(ss['exam_code'], "基本情報技術者試験A")
-            
-            all_q = load_data(ss['exam_code'])
-            
-            restored_qs = []
-            for sq in ss['q_keys']:
-                match = next((q for q in all_q if q.get('year') == sq['year'] and int(q.get('id', 0)) == int(sq['id'])), None)
-                if match: restored_qs.append(match)
-            
-            st.session_state.quiz_questions = restored_qs
-            st.session_state.current_index = int(ss['current_index'])
-            st.session_state.config_done = True
-            st.session_state.is_over_time = False 
-            st.session_state.start_time = time.time()
-            st.rerun()
+            # 💡 初回確認テストや実力テスト、または不明な古いデータからの再開を完全にブロックする
+            saved_activity = ss.get('activity_type')
+            if saved_activity in ['initial_check', 'ability_test'] or saved_activity is None:
+                st.warning("⚠️ 初回確認テストおよび実力テストは中断からの再開ができません。過去のテストデータは破棄されました。下のボタンから最初からやり直してください。")
+                clear_suspend_state_in_aws(st.session_state.user_name)
+                st.session_state.suspended = False
+                st.session_state.saved_session = None
+            else:
+                st.session_state.exam_code = ss['exam_code']
+                
+                exam_options = {"FEA": "基本情報技術者試験A", "FEB": "基本情報技術者試験B", "IP": "ITパスポート"}
+                st.session_state.exam_name = exam_options.get(ss['exam_code'], "基本情報技術者試験A")
+                
+                all_q = load_data(ss['exam_code'])
+                
+                restored_qs = []
+                for sq in ss['q_keys']:
+                    match = next((q for q in all_q if q.get('year') == sq['year'] and int(q.get('id', 0)) == int(sq['id'])), None)
+                    if match: restored_qs.append(match)
+                
+                st.session_state.quiz_questions = restored_qs
+                st.session_state.current_index = int(ss['current_index'])
+                
+                # 💡 中断データから学習モードを正確に復元
+                st.session_state.activity_type = saved_activity
+                st.session_state.test_run_id = ss.get('test_run_id', '')
+                st.session_state.test_set_id = ss.get('test_set_id', '')
+                st.session_state.test_attempt_no = ss.get('test_attempt_no', 1)
+                
+                st.session_state.config_done = True
+                st.session_state.is_over_time = False 
+                st.session_state.start_time = time.time()
+                st.rerun()
         else:
             st.warning("前回の中断ポイントがありません。")
 
@@ -495,7 +513,6 @@ if not st.session_state.config_done:
                             answered.append(q)
                             
                     def select_balanced_questions(candidates_pool, needed_count, current_selected):
-                        """Greedy方式による条件付きランダム抽出関数"""
                         selected = []
                         pool = candidates_pool.copy()
                         while len(selected) < needed_count and pool:
@@ -570,7 +587,7 @@ if st.session_state.finished:
         initial_checks = profile.get("initial_checks", {})
         
         if not initial_checks.get(st.session_state.exam_code, {}).get("completed"):
-            initial_checks[st.session_state.exam_code] = {
+            result_dict = {
                 "completed": True,
                 "completed_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 "completed_run_id": st.session_state.test_run_id,
@@ -578,17 +595,9 @@ if st.session_state.finished:
                 "score": st.session_state.score,
                 "total": len(st.session_state.quiz_questions)
             }
-            try:
-                dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION'))
-                table = dynamodb.Table('Exam_Learning_Users')
-                table.update_item(
-                    Key={'user_id': str(st.session_state.user_name)},
-                    UpdateExpression="SET initial_checks = :ic",
-                    ExpressionAttributeValues={":ic": initial_checks}
-                )
-                st.success("🎉 初回確認テストが完了しました！次回から自由学習が利用できます。")
-            except Exception as e:
-                st.error(f"初回確認テストの完了保存に失敗しました: {e}")
+            # 💡 直接boto3を使わず、aws_db.pyの安全な関数を使用する
+            save_initial_check_completion(st.session_state.user_name, st.session_state.exam_code, result_dict)
+            st.success("🎉 初回確認テストが完了しました！次回から自由学習が利用できます。")
 
     if st.button("トップへ戻り、もう一度設定する", use_container_width=True, type="primary"): 
         st.session_state.config_done = False
