@@ -22,7 +22,7 @@ from aws_db import (
     load_bookmarks_from_aws,
     load_user_profile,
     save_user_profile,
-    save_initial_check_completion  # 💡 追記
+    save_initial_check_completion
 )
 from dashboard import show_dashboard
 from quiz_page import show_quiz_page
@@ -181,6 +181,10 @@ if st.session_state.user_name is None:
                 with st.spinner("☁️ AWSから過去の学習データと中断データを同期しています..."):
                     profile = load_user_profile(input_name)
                     
+                    if profile is None:
+                        st.error("🚨 AWSからユーザー情報を取得できませんでした。")
+                        st.stop()
+                    
                     final_email = profile.get('email', '')
                     final_notif = profile.get('receive_notifications', True)
 
@@ -278,7 +282,10 @@ if st.session_state.user_name:
         st.session_state.email = final_email
         st.session_state.receive_notifications = new_notif
         save_user_profile(st.session_state.user_name, final_email, new_notif)
+        
+        # 💡 修正点：メッセージを見せるために1.5秒待機してからリロードする
         st.sidebar.success("✅ 通知設定を更新しました")
+        time.sleep(1.5)
         st.rerun()
 
     st.sidebar.markdown("---")
@@ -322,7 +329,6 @@ if not st.session_state.config_done:
         if st.session_state.suspended and st.session_state.saved_session:
             ss = st.session_state.saved_session
             
-            # 💡 初回確認テストや実力テスト、または不明な古いデータからの再開を完全にブロックする
             saved_activity = ss.get('activity_type')
             if saved_activity in ['initial_check', 'ability_test'] or saved_activity is None:
                 st.warning("⚠️ 初回確認テストおよび実力テストは中断からの再開ができません。過去のテストデータは破棄されました。下のボタンから最初からやり直してください。")
@@ -345,7 +351,6 @@ if not st.session_state.config_done:
                 st.session_state.quiz_questions = restored_qs
                 st.session_state.current_index = int(ss['current_index'])
                 
-                # 💡 中断データから学習モードを正確に復元
                 st.session_state.activity_type = saved_activity
                 st.session_state.test_run_id = ss.get('test_run_id', '')
                 st.session_state.test_set_id = ss.get('test_set_id', '')
@@ -434,6 +439,11 @@ if not st.session_state.config_done:
         st.write("---")
         
         profile = load_user_profile(st.session_state.user_name)
+        
+        if profile is None:
+            st.error("🚨 AWSからユーザー情報を取得できませんでした。")
+            st.stop()
+            
         initial_checks = profile.get("initial_checks", {})
         is_initial_completed = initial_checks.get(st.session_state.exam_code, {}).get("completed", False)
         
@@ -590,6 +600,11 @@ if st.session_state.finished:
     
     if st.session_state.get("activity_type") == "initial_check":
         profile = load_user_profile(st.session_state.user_name)
+        
+        if profile is None:
+            st.error("🚨 AWSからユーザー情報を取得できませんでした。")
+            st.stop()
+            
         initial_checks = profile.get("initial_checks", {})
         
         if not initial_checks.get(st.session_state.exam_code, {}).get("completed"):
@@ -601,7 +616,6 @@ if st.session_state.finished:
                 "score": st.session_state.score,
                 "total": len(st.session_state.quiz_questions)
             }
-            # 💡 直接boto3を使わず、aws_db.pyの安全な関数を使用する
             save_initial_check_completion(st.session_state.user_name, st.session_state.exam_code, result_dict)
             st.success("🎉 初回確認テストが完了しました！次回から自由学習が利用できます。")
 

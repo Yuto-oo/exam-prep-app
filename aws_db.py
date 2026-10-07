@@ -151,7 +151,7 @@ def load_global_statistics_from_aws(exam_code):
                 q_stats['total_time'] += time_taken
                 q_stats['time_count'] += 1
             
-            if "自信あり" in confidence and is_correct == 0:
+            if confidence == "自信あり" and is_correct == 0:
                 q_stats['trick_count'] += 1
                 
             q_stats['level_count'][lvl_group] += 1
@@ -237,7 +237,6 @@ def send_result_to_aws(q_data, selected_label, selected_text, is_correct, time_t
     except Exception as e:
         st.error(f"🚨 AWS送信エラー: {e}")
 
-# --- セッション中断・再開用 ---
 def save_suspend_state_to_aws(username, exam_code, quiz_questions, current_index, activity_type="free_learning", test_run_id="", test_set_id="", test_attempt_no=1):
     try:
         dynamodb = get_dynamodb_resource()
@@ -279,7 +278,6 @@ def clear_suspend_state_in_aws(username):
     except Exception:
         pass
 
-# --- ブックマーク機能用 ---
 def load_bookmarks_from_aws(username):
     try:
         dynamodb = get_dynamodb_resource()
@@ -337,9 +335,10 @@ def load_user_profile(username):
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table('Exam_Learning_Users')
         response = table.get_item(Key={'user_id': str(username)})
+        # 💡 修正点：エラー時はNoneを返し、呼び出し元のapp.pyに判断させる
         return response.get('Item', {})
     except Exception:
-        return {}
+        return None
 
 def save_user_profile(username, email, receive_notifications):
     try:
@@ -363,6 +362,10 @@ def save_initial_check_completion(username, exam_code, result_dict):
         table = dynamodb.Table('Exam_Learning_Users')
         
         profile = load_user_profile(username)
+        # 💡 修正点：AWSから取得失敗時は保存処理を安全にストップする
+        if profile is None:
+            raise Exception("AWSからユーザー情報を取得できませんでした。")
+            
         initial_checks = profile.get("initial_checks", {})
         initial_checks[exam_code] = result_dict
         

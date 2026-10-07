@@ -76,10 +76,10 @@ def show_dashboard(questions, history, exam_code):
             status_label = "未解答"
         elif needs_review:
             review_count += 1
-            status_label = "推定保持率40%以下" # 💡 60%から40%に修正
+            status_label = "推定保持率40%以下"
         else:
             mastered_count += 1
-            status_label = "推定保持率40%超" # 💡 60%から40%に修正
+            status_label = "推定保持率40%超"
 
         if solve_count > 0:
             data_list.append({
@@ -104,7 +104,6 @@ def show_dashboard(questions, history, exam_code):
     col_left, col_right = st.columns(2)
     with col_left:
         st.subheader("📊 学習進捗ステータス")
-        # 💡 円グラフのラベルと色指定も40%に修正
         status_df = pd.DataFrame({"ステータス": ["未解答", "推定保持率40%以下", "推定保持率40%超"], "問題数": [unanswered_count, review_count, mastered_count]})
         fig_pie = px.pie(status_df, names="ステータス", values="問題数", hole=0.45, color="ステータス", color_discrete_map={"未解答": "#9E9E9E", "推定保持率40%以下": "#FF7043", "推定保持率40%超": "#66BB6A"})
         fig_pie.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=280, legend=dict(orientation="h", y=-0.1))
@@ -125,7 +124,8 @@ def show_dashboard(questions, history, exam_code):
         def classify_gap(row):
             is_corr = row["last_correct"] == 1
             conf_str = str(row["last_confidence"])
-            is_confident = "自信あり" in conf_str or "少し自信あり" in conf_str
+            # 💡 「少し自信あり」を除外し、「自信あり」の完全一致のみに変更
+            is_confident = conf_str == "自信あり"
             
             if is_confident and is_corr: return "🟢 高確信正答"
             elif not is_confident and is_corr: return "🟡 低確信正答"
