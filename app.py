@@ -5,7 +5,13 @@ import random
 import time
 import uuid
 import boto3
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+def get_jst_now():
+    """常に日本時間(JST)の現在時刻を返す関数"""
+    JST = timezone(timedelta(hours=+9), 'JST')
+    return datetime.now(JST).replace(tzinfo=None)
+
 from dotenv import load_dotenv
 import streamlit as st
 
@@ -589,7 +595,7 @@ if st.session_state.finished:
         if not initial_checks.get(st.session_state.exam_code, {}).get("completed"):
             result_dict = {
                 "completed": True,
-                "completed_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                "completed_at": get_jst_now().strftime('%Y-%m-%d %H:%M:%S'),
                 "completed_run_id": st.session_state.test_run_id,
                 "test_set_id": st.session_state.test_set_id,
                 "score": st.session_state.score,

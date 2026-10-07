@@ -1,12 +1,17 @@
 # -*- coding: utf-8 -*-
 import math
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+def get_jst_now():
+    """常に日本時間(JST)の現在時刻を返す関数"""
+    JST = timezone(timedelta(hours=+9), 'JST')
+    return datetime.now(JST).replace(tzinfo=None)
 
 def calculate_retention_and_days(last_timestamp_str, streak, last_correct, last_confidence, target_rate=40.0):
     if not last_timestamp_str: return 0.0, 0.0
     try:
         last_time = datetime.strptime(last_timestamp_str, '%Y-%m-%d %H:%M:%S')
-        now = datetime.now()
+        now = get_jst_now()
         delta = now - last_time
         t_actual = max(0.0, delta.total_seconds() / 86400.0)
         

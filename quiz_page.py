@@ -2,7 +2,13 @@
 import os
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+def get_jst_now():
+    """常に日本時間(JST)の現在時刻を返す関数"""
+    JST = timezone(timedelta(hours=+9), 'JST')
+    return datetime.now(JST).replace(tzinfo=None)
+
 from aws_db import (
     load_global_statistics_from_aws, 
     send_result_to_aws, 
@@ -296,7 +302,7 @@ def show_quiz_page(q_data):
 
           if is_correct:
               st.session_state.score += 1
-          now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+          now_str = get_jst_now().strftime('%Y-%m-%d %H:%M:%S')
 
           if q_key not in st.session_state.history:
               st.session_state.history[q_key] = {

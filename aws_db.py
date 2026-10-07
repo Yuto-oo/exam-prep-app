@@ -3,10 +3,15 @@ import os
 import time
 import boto3
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from boto3.dynamodb.conditions import Key, Attr
 import streamlit as st
+
+def get_jst_now():
+    """常に日本時間(JST)の現在時刻を返す関数"""
+    JST = timezone(timedelta(hours=+9), 'JST')
+    return datetime.now(JST).replace(tzinfo=None)
 
 from srs_logic import evaluate_history_retention
 
@@ -198,7 +203,7 @@ def send_result_to_aws(q_data, selected_label, selected_text, is_correct, time_t
             
         item = {
             'user_id': str(st.session_state.user_name),
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'timestamp': get_jst_now().strftime('%Y-%m-%d %H:%M:%S'),
             'exam_code': str(st.session_state.exam_code), 
             'year': str(q_data.get('year', '不明')),
             'question_id': Decimal(str(q_data.get('id', 0))),
@@ -240,7 +245,7 @@ def save_suspend_state_to_aws(username, exam_code, quiz_questions, current_index
         q_keys = [{"year": str(q.get("year", "")), "id": int(q.get("id", 0))} for q in quiz_questions]
         item = {
             'user_id': str(username),
-            'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'updated_at': get_jst_now().strftime('%Y-%m-%d %H:%M:%S'),
             'exam_code': str(exam_code),
             'q_keys': q_keys,
             'current_index': int(current_index),
@@ -295,7 +300,7 @@ def add_bookmark_to_aws(username, q_key):
         table.put_item(Item={
             'user_id': str(username),
             'q_key': str(q_key),
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            'timestamp': get_jst_now().strftime('%Y-%m-%d %H:%M:%S')
         })
     except Exception:
         pass
@@ -346,7 +351,7 @@ def save_user_profile(username, email, receive_notifications):
             ExpressionAttributeValues={
                 ':e': str(email) if email else "",
                 ':n': bool(receive_notifications),
-                ':u': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                ':u': get_jst_now().strftime('%Y-%m-%d %H:%M:%S')
             }
         )
     except Exception:
@@ -366,7 +371,7 @@ def save_initial_check_completion(username, exam_code, result_dict):
             UpdateExpression="SET initial_checks = :ic, updated_at = :u",
             ExpressionAttributeValues={
                 ':ic': initial_checks,
-                ':u': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                ':u': get_jst_now().strftime('%Y-%m-%d %H:%M:%S')
             }
         )
     except Exception as e:

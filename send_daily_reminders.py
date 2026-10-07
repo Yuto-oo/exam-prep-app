@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
 import os
 import boto3
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from boto3.dynamodb.conditions import Key
+
+def get_jst_now():
+    """常に日本時間(JST)の現在時刻を返す関数"""
+    JST = timezone(timedelta(hours=+9), 'JST')
+    return datetime.now(JST).replace(tzinfo=None)
 
 # 💡 AWS Lambda環境では .env が存在しないため、エラーを回避する処理を追加
 try:
@@ -134,7 +139,7 @@ def main():
                 if last_time_str:
                     try:
                         lt = datetime.strptime(last_time_str, '%Y-%m-%d %H:%M:%S')
-                        days_since = round((datetime.now() - lt).total_seconds() / 86400.0, 2)
+                        days_since = round((get_jst_now() - lt).total_seconds() / 86400.0, 2)
                     except:
                         pass
                 
@@ -163,7 +168,7 @@ def main():
             print(f"📧 {user_id} ({email}) にメールを送信します... (復習対象: {review_count}問)")
             if send_email(ses_client, email, subject, body):
                 print("   -> ✅ 送信成功！")
-                sent_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                sent_at = get_jst_now().strftime('%Y-%m-%d %H:%M:%S')
                 for target in remind_targets:
                     log_data = target.copy()
                     log_data['user_id'] = user_id
