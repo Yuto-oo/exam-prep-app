@@ -32,7 +32,6 @@ ITパスポートおよび基本情報技術者試験の学習をサポートし
 ```text
 .
 ├── .devcontainer/               # Dev Container設定フォルダ
-├── .github/workflows/           # GitHub Actions設定
 ├── images/                      # クイズ問題用画像リソース
 ├── .env                         # 【※手動で作成・Git管理外】環境変数（AWSキー等）
 ├── .gitignore                   # Git管理除外設定
