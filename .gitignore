@@ -1,4 +1,17 @@
+# 環境変数（絶対にGitHubに上げてはいけないファイル）
 .env
-exam-app-pro_accessKeys.csv
-venv/
+
+# Pythonのキャッシュファイル
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 仮想環境
+venv/
+.venv/
+env/
+
+# Mac / Windows のシステムファイル
+.DS_Store
+Thumbs.db

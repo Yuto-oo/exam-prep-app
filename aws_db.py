@@ -2,6 +2,7 @@
 import os
 import time
 import boto3
+import uuid
 from datetime import datetime
 from decimal import Decimal
 from boto3.dynamodb.conditions import Key, Attr
@@ -32,9 +33,16 @@ def load_user_history_from_aws(username):
         items.sort(key=lambda x: x.get('timestamp', ''))
         
         for item in items:
+            # 💡 後方互換：属性が無い旧ログは 'free_learning' として扱う
+            activity_type = item.get('activity_type', 'free_learning')
             time_taken = float(item.get('time_taken', 0.0))
-            if time_taken >= 900.0:
-                continue
+            
+            # 💡 900秒以上でも履歴には反映し、時間分析への組み込みだけを制御する
+            valid_for_time_analysis = item.get('valid_for_time_analysis')
+            if valid_for_time_analysis is None:
+                is_time_valid = (time_taken < 900.0) # 旧ログ互換
+            else:
+                is_time_valid = bool(valid_for_time_analysis)
 
             exam_code = str(item.get('exam_code', 'FE'))
             year = str(item.get('year', '不明'))
@@ -48,7 +56,7 @@ def load_user_history_from_aws(username):
             if q_key not in history:
                 history[q_key] = {
                     'solve_count': 0,
-                    'first_time': time_taken,
+                    'first_time': time_taken if is_time_valid else 0.0,
                     'times': [],
                     'last_correct': is_correct,
                     'last_confidence': confidence,
@@ -62,7 +70,8 @@ def load_user_history_from_aws(username):
                 history[q_key]['streak'] = history[q_key]['streak'] + 1 if is_correct else 0
             
             history[q_key]['solve_count'] += 1
-            history[q_key]['times'].append(time_taken)
+            if is_time_valid:
+                history[q_key]['times'].append(time_taken)
             
         history = evaluate_history_retention(history)
         return history
@@ -89,9 +98,15 @@ def load_global_statistics_from_aws(exam_code):
         questions_data = {}
         
         for item in items:
+            # 💡 後方互換対応と、900秒以上データの分離
+            activity_type = item.get('activity_type', 'free_learning')
             time_taken = float(item.get('time_taken', 0.0))
-            if time_taken >= 900.0:
-                continue
+            
+            valid_for_time_analysis = item.get('valid_for_time_analysis')
+            if valid_for_time_analysis is None:
+                is_time_valid = (time_taken < 900.0) # 旧ログ互換
+            else:
+                is_time_valid = bool(valid_for_time_analysis)
 
             cat = str(item.get('category_large', '未分類'))
             is_correct = 1 if bool(item.get('is_correct', False)) else 0
@@ -109,14 +124,21 @@ def load_global_statistics_from_aws(exam_code):
                 
             for target_group in ["全体", lvl_group]:
                 if target_group not in levels_data: levels_data[target_group] = {}
-                if cat not in levels_data[target_group]: levels_data[target_group][cat] = {'correct_sum': 0, 'time_sum': 0, 'count': 0}
+                if cat not in levels_data[target_group]: 
+                    # 💡 count(全体の件数)と、time_count(時間計算用の有効件数)を分離
+                    levels_data[target_group][cat] = {'correct_sum': 0, 'time_sum': 0.0, 'count': 0, 'time_count': 0}
+                
                 levels_data[target_group][cat]['correct_sum'] += is_correct
-                levels_data[target_group][cat]['time_sum'] += time_taken
                 levels_data[target_group][cat]['count'] += 1
+                
+                if is_time_valid:
+                    levels_data[target_group][cat]['time_sum'] += time_taken
+                    levels_data[target_group][cat]['time_count'] += 1
 
             if q_key not in questions_data:
+                # 💡 total_count と time_count を分離
                 questions_data[q_key] = {
-                    'total_count': 0, 'correct_count': 0, 'total_time': 0.0, 'trick_count': 0,
+                    'total_count': 0, 'correct_count': 0, 'total_time': 0.0, 'time_count': 0, 'trick_count': 0,
                     'level_correct': {"初学者": 0, "中級者": 0, "上級者": 0, "その他": 0},
                     'level_count': {"初学者": 0, "中級者": 0, "上級者": 0, "その他": 0}
                 }
@@ -124,7 +146,10 @@ def load_global_statistics_from_aws(exam_code):
             q_stats = questions_data[q_key]
             q_stats['total_count'] += 1
             q_stats['correct_count'] += is_correct
-            q_stats['total_time'] += time_taken
+            
+            if is_time_valid:
+                q_stats['total_time'] += time_taken
+                q_stats['time_count'] += 1
             
             if "自信あり" in confidence and is_correct == 0:
                 q_stats['trick_count'] += 1
@@ -136,15 +161,17 @@ def load_global_statistics_from_aws(exam_code):
         for lvl, categories in levels_data.items():
             final_levels[lvl] = {}
             for cat, stats in categories.items():
+                avg_time = (stats['time_sum'] / stats['time_count']) if stats['time_count'] > 0 else 0.0
                 final_levels[lvl][cat] = {
                     'avg_correct_rate': (stats['correct_sum'] / stats['count']) * 100,
-                    'avg_time': stats['time_sum'] / stats['count'],
+                    'avg_time': avg_time,
                     'count': stats['count']
                 }
                 
         final_questions = {}
         for q_k, stats in questions_data.items():
             tot = stats['total_count']
+            t_cnt = stats['time_count']
             lvl_rates = {}
             for lg in ["初学者", "中級者", "上級者"]:
                 l_cnt = stats['level_count'][lg]
@@ -152,7 +179,7 @@ def load_global_statistics_from_aws(exam_code):
 
             final_questions[q_k] = {
                 'global_correct_rate': (stats['correct_count'] / tot) * 100 if tot > 0 else 0,
-                'global_avg_time': stats['total_time'] / tot if tot > 0 else 0,
+                'global_avg_time': stats['total_time'] / t_cnt if t_cnt > 0 else 0.0,
                 'trick_count': stats['trick_count'],
                 'total_count': tot,
                 'level_rates': lvl_rates
@@ -163,10 +190,18 @@ def load_global_statistics_from_aws(exam_code):
         st.warning(f"⚠️ 統計データの取得に失敗しました: {e}")
         return {"levels": {}, "questions": {}, "total_logs": 0}
 
-def send_result_to_aws(q_data, selected_label, selected_text, is_correct, time_taken, confidence, metrics):
+# 💡 研究用ログの追加属性を引数として受け取る
+def send_result_to_aws(q_data, selected_label, selected_text, is_correct, time_taken, confidence, metrics,
+                       activity_type="free_learning", test_run_id="", test_set_id="", test_attempt_no=1,
+                       raw_response_time=0.0, valid_for_time_analysis=True, time_exclusion_reason="",
+                       predicted_retention_before_answer=None, retention_model_version="v1"):
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table('Exam_Learning_Logs')
+        
+        if raw_response_time == 0.0:
+            raw_response_time = time_taken
+            
         item = {
             'user_id': str(st.session_state.user_name),
             'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
@@ -184,8 +219,23 @@ def send_result_to_aws(q_data, selected_label, selected_text, is_correct, time_t
             'answer_confidence': str(confidence),
             'user_solve_count': Decimal(str(metrics['solve_count'])),
             'first_answer_time_sec': Decimal(str(metrics['first_time'])),
-            'user_average_answer_time_sec': Decimal(str(metrics['avg_time']))
+            'user_average_answer_time_sec': Decimal(str(metrics['avg_time'])),
+            
+            # 💡 研究用追加属性
+            'activity_type': str(activity_type),
+            'test_run_id': str(test_run_id),
+            'test_set_id': str(test_set_id),
+            'test_attempt_no': Decimal(str(test_attempt_no)),
+            'raw_response_time': Decimal(str(raw_response_time)),
+            'valid_for_time_analysis': bool(valid_for_time_analysis),
+            'time_exclusion_reason': str(time_exclusion_reason),
+            'retention_model_version': str(retention_model_version)
         }
+        
+        # 💡 初回答などで値がNoneの場合はDynamoDBへの保存エラーを避けるためキーを含めない
+        if predicted_retention_before_answer is not None:
+            item['predicted_retention_before_answer'] = Decimal(str(predicted_retention_before_answer))
+            
         table.put_item(Item=item)
     except Exception as e:
         st.error(f"🚨 AWS送信エラー: {e}")
@@ -281,7 +331,7 @@ def load_global_bookmark_counts():
     except Exception:
         return {}
 
-# 💡 新規追加：ユーザープロファイル（通知設定・メールアドレス）管理用
+# 💡 ユーザープロファイル管理用（update_itemへ変更）
 def load_user_profile(username):
     try:
         dynamodb = get_dynamodb_resource()
@@ -295,11 +345,67 @@ def save_user_profile(username, email, receive_notifications):
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table('Exam_Learning_Users')
-        table.put_item(Item={
-            'user_id': str(username),
-            'email': str(email) if email else "",
-            'receive_notifications': bool(receive_notifications),
-            'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        })
+        # 💡 put_item（全置換）を避けて、指定項目だけを update_item する
+        table.update_item(
+            Key={'user_id': str(username)},
+            UpdateExpression="SET email = :e, receive_notifications = :n, updated_at = :u",
+            ExpressionAttributeValues={
+                ':e': str(email) if email else "",
+                ':n': bool(receive_notifications),
+                ':u': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+        )
     except Exception:
         pass
+
+# 💡 新規追加：初回確認テストの完了状態を保存
+def save_initial_check_completion(username, exam_code, result_dict):
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table('Exam_Learning_Users')
+        
+        # 既存プロファイルの initial_checks を取得・更新
+        profile = load_user_profile(username)
+        initial_checks = profile.get("initial_checks", {})
+        initial_checks[exam_code] = result_dict
+        
+        table.update_item(
+            Key={'user_id': str(username)},
+            UpdateExpression="SET initial_checks = :ic, updated_at = :u",
+            ExpressionAttributeValues={
+                ':ic': initial_checks,
+                ':u': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+        )
+    except Exception as e:
+        st.error(f"完了状態の保存エラー: {e}")
+
+# 💡 新規追加：リマインド送信履歴の専用テーブル保存機能
+def save_reminder_log(log_data):
+    """
+    send_daily_reminders.py から呼び出され、
+    リマインド送信時のメタデータ（問題単位）を専用テーブルへ記録します。
+    """
+    try:
+        dynamodb = get_dynamodb_resource()
+        # 既存ログを汚染しないよう、完全に新しい専用テーブルを使用します
+        table = dynamodb.Table('Exam_Learning_Reminder_Logs')
+        
+        item = {
+            'log_id': str(uuid.uuid4()), # 主キー
+            'user_id': str(log_data['user_id']),
+            'sent_at': str(log_data['sent_at']),
+            'exam_code': str(log_data['exam_code']),
+            'year': str(log_data['year']),
+            'question_id': Decimal(str(log_data['question_id'])),
+            'reminder_reason': str(log_data['reminder_reason']),
+            'predicted_retention_at_send': Decimal(str(log_data['predicted_retention_at_send'])),
+            'last_answer_at': str(log_data['last_answer_at']),
+            'last_is_correct': bool(log_data['last_is_correct']),
+            'last_confidence': str(log_data['last_confidence']),
+            'user_solve_count': Decimal(str(log_data['user_solve_count'])),
+            'days_since_last_answer': Decimal(str(log_data['days_since_last_answer']))
+        }
+        table.put_item(Item=item)
+    except Exception as e:
+        print(f"🚨 リマインドログの保存に失敗しました (user: {log_data.get('user_id')}): {e}")
