@@ -2,10 +2,16 @@
 import os
 import time
 import boto3
-from datetime import datetime
+import uuid
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from boto3.dynamodb.conditions import Key, Attr
 import streamlit as st
+
+def get_jst_now():
+    """常に日本時間(JST)の現在時刻を返す関数"""
+    JST = timezone(timedelta(hours=+9), 'JST')
+    return datetime.now(JST).replace(tzinfo=None)
 
 from srs_logic import evaluate_history_retention
 
@@ -32,9 +38,14 @@ def load_user_history_from_aws(username):
         items.sort(key=lambda x: x.get('timestamp', ''))
         
         for item in items:
+            activity_type = item.get('activity_type', 'free_learning')
             time_taken = float(item.get('time_taken', 0.0))
-            if time_taken >= 900.0:
-                continue
+            
+            valid_for_time_analysis = item.get('valid_for_time_analysis')
+            if valid_for_time_analysis is None:
+                is_time_valid = (time_taken < 900.0)
+            else:
+                is_time_valid = bool(valid_for_time_analysis)
 
             exam_code = str(item.get('exam_code', 'FE'))
             year = str(item.get('year', '不明'))
@@ -48,7 +59,7 @@ def load_user_history_from_aws(username):
             if q_key not in history:
                 history[q_key] = {
                     'solve_count': 0,
-                    'first_time': time_taken,
+                    'first_time': time_taken if is_time_valid else 0.0,
                     'times': [],
                     'last_correct': is_correct,
                     'last_confidence': confidence,
@@ -62,7 +73,8 @@ def load_user_history_from_aws(username):
                 history[q_key]['streak'] = history[q_key]['streak'] + 1 if is_correct else 0
             
             history[q_key]['solve_count'] += 1
-            history[q_key]['times'].append(time_taken)
+            if is_time_valid:
+                history[q_key]['times'].append(time_taken)
             
         history = evaluate_history_retention(history)
         return history
@@ -89,9 +101,14 @@ def load_global_statistics_from_aws(exam_code):
         questions_data = {}
         
         for item in items:
+            activity_type = item.get('activity_type', 'free_learning')
             time_taken = float(item.get('time_taken', 0.0))
-            if time_taken >= 900.0:
-                continue
+            
+            valid_for_time_analysis = item.get('valid_for_time_analysis')
+            if valid_for_time_analysis is None:
+                is_time_valid = (time_taken < 900.0)
+            else:
+                is_time_valid = bool(valid_for_time_analysis)
 
             cat = str(item.get('category_large', '未分類'))
             is_correct = 1 if bool(item.get('is_correct', False)) else 0
@@ -109,14 +126,19 @@ def load_global_statistics_from_aws(exam_code):
                 
             for target_group in ["全体", lvl_group]:
                 if target_group not in levels_data: levels_data[target_group] = {}
-                if cat not in levels_data[target_group]: levels_data[target_group][cat] = {'correct_sum': 0, 'time_sum': 0, 'count': 0}
+                if cat not in levels_data[target_group]: 
+                    levels_data[target_group][cat] = {'correct_sum': 0, 'time_sum': 0.0, 'count': 0, 'time_count': 0}
+                
                 levels_data[target_group][cat]['correct_sum'] += is_correct
-                levels_data[target_group][cat]['time_sum'] += time_taken
                 levels_data[target_group][cat]['count'] += 1
+                
+                if is_time_valid:
+                    levels_data[target_group][cat]['time_sum'] += time_taken
+                    levels_data[target_group][cat]['time_count'] += 1
 
             if q_key not in questions_data:
                 questions_data[q_key] = {
-                    'total_count': 0, 'correct_count': 0, 'total_time': 0.0, 'trick_count': 0,
+                    'total_count': 0, 'correct_count': 0, 'total_time': 0.0, 'time_count': 0, 'trick_count': 0,
                     'level_correct': {"初学者": 0, "中級者": 0, "上級者": 0, "その他": 0},
                     'level_count': {"初学者": 0, "中級者": 0, "上級者": 0, "その他": 0}
                 }
@@ -124,9 +146,12 @@ def load_global_statistics_from_aws(exam_code):
             q_stats = questions_data[q_key]
             q_stats['total_count'] += 1
             q_stats['correct_count'] += is_correct
-            q_stats['total_time'] += time_taken
             
-            if "自信あり" in confidence and is_correct == 0:
+            if is_time_valid:
+                q_stats['total_time'] += time_taken
+                q_stats['time_count'] += 1
+            
+            if confidence == "自信あり" and is_correct == 0:
                 q_stats['trick_count'] += 1
                 
             q_stats['level_count'][lvl_group] += 1
@@ -136,15 +161,17 @@ def load_global_statistics_from_aws(exam_code):
         for lvl, categories in levels_data.items():
             final_levels[lvl] = {}
             for cat, stats in categories.items():
+                avg_time = (stats['time_sum'] / stats['time_count']) if stats['time_count'] > 0 else 0.0
                 final_levels[lvl][cat] = {
                     'avg_correct_rate': (stats['correct_sum'] / stats['count']) * 100,
-                    'avg_time': stats['time_sum'] / stats['count'],
+                    'avg_time': avg_time,
                     'count': stats['count']
                 }
                 
         final_questions = {}
         for q_k, stats in questions_data.items():
             tot = stats['total_count']
+            t_cnt = stats['time_count']
             lvl_rates = {}
             for lg in ["初学者", "中級者", "上級者"]:
                 l_cnt = stats['level_count'][lg]
@@ -152,7 +179,7 @@ def load_global_statistics_from_aws(exam_code):
 
             final_questions[q_k] = {
                 'global_correct_rate': (stats['correct_count'] / tot) * 100 if tot > 0 else 0,
-                'global_avg_time': stats['total_time'] / tot if tot > 0 else 0,
+                'global_avg_time': stats['total_time'] / t_cnt if t_cnt > 0 else 0.0,
                 'trick_count': stats['trick_count'],
                 'total_count': tot,
                 'level_rates': lvl_rates
@@ -163,13 +190,20 @@ def load_global_statistics_from_aws(exam_code):
         st.warning(f"⚠️ 統計データの取得に失敗しました: {e}")
         return {"levels": {}, "questions": {}, "total_logs": 0}
 
-def send_result_to_aws(q_data, selected_label, selected_text, is_correct, time_taken, confidence, metrics):
+def send_result_to_aws(q_data, selected_label, selected_text, is_correct, time_taken, confidence, metrics,
+                       activity_type="free_learning", test_run_id="", test_set_id="", test_attempt_no=1,
+                       raw_response_time=0.0, valid_for_time_analysis=True, time_exclusion_reason="",
+                       predicted_retention_before_answer=None, retention_model_version="v1"):
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table('Exam_Learning_Logs')
+        
+        if raw_response_time == 0.0:
+            raw_response_time = time_taken
+            
         item = {
             'user_id': str(st.session_state.user_name),
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'timestamp': get_jst_now().strftime('%Y-%m-%d %H:%M:%S'),
             'exam_code': str(st.session_state.exam_code), 
             'year': str(q_data.get('year', '不明')),
             'question_id': Decimal(str(q_data.get('id', 0))),
@@ -184,25 +218,41 @@ def send_result_to_aws(q_data, selected_label, selected_text, is_correct, time_t
             'answer_confidence': str(confidence),
             'user_solve_count': Decimal(str(metrics['solve_count'])),
             'first_answer_time_sec': Decimal(str(metrics['first_time'])),
-            'user_average_answer_time_sec': Decimal(str(metrics['avg_time']))
+            'user_average_answer_time_sec': Decimal(str(metrics['avg_time'])),
+            
+            'activity_type': str(activity_type),
+            'test_run_id': str(test_run_id),
+            'test_set_id': str(test_set_id),
+            'test_attempt_no': Decimal(str(test_attempt_no)),
+            'raw_response_time': Decimal(str(raw_response_time)),
+            'valid_for_time_analysis': bool(valid_for_time_analysis),
+            'time_exclusion_reason': str(time_exclusion_reason),
+            'retention_model_version': str(retention_model_version)
         }
+        
+        if predicted_retention_before_answer is not None:
+            item['predicted_retention_before_answer'] = Decimal(str(predicted_retention_before_answer))
+            
         table.put_item(Item=item)
     except Exception as e:
         st.error(f"🚨 AWS送信エラー: {e}")
 
-# --- セッション中断・再開用 ---
-def save_suspend_state_to_aws(username, exam_code, quiz_questions, current_index):
+def save_suspend_state_to_aws(username, exam_code, quiz_questions, current_index, activity_type="free_learning", test_run_id="", test_set_id="", test_attempt_no=1):
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table('Exam_Learning_Sessions')
         q_keys = [{"year": str(q.get("year", "")), "id": int(q.get("id", 0))} for q in quiz_questions]
         item = {
             'user_id': str(username),
-            'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'updated_at': get_jst_now().strftime('%Y-%m-%d %H:%M:%S'),
             'exam_code': str(exam_code),
             'q_keys': q_keys,
             'current_index': int(current_index),
-            'is_suspended': True
+            'is_suspended': True,
+            'activity_type': str(activity_type),
+            'test_run_id': str(test_run_id),
+            'test_set_id': str(test_set_id),
+            'test_attempt_no': int(test_attempt_no)
         }
         table.put_item(Item=item)
     except Exception as e:
@@ -228,7 +278,6 @@ def clear_suspend_state_in_aws(username):
     except Exception:
         pass
 
-# --- ブックマーク機能用 ---
 def load_bookmarks_from_aws(username):
     try:
         dynamodb = get_dynamodb_resource()
@@ -249,7 +298,7 @@ def add_bookmark_to_aws(username, q_key):
         table.put_item(Item={
             'user_id': str(username),
             'q_key': str(q_key),
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            'timestamp': get_jst_now().strftime('%Y-%m-%d %H:%M:%S')
         })
     except Exception:
         pass
@@ -281,7 +330,6 @@ def load_global_bookmark_counts():
     except Exception:
         return {}
 
-# 💡 新規追加：ユーザープロファイル（通知設定・メールアドレス）管理用
 def load_user_profile(username):
     try:
         dynamodb = get_dynamodb_resource()
@@ -289,17 +337,80 @@ def load_user_profile(username):
         response = table.get_item(Key={'user_id': str(username)})
         return response.get('Item', {})
     except Exception:
-        return {}
+        return None
 
 def save_user_profile(username, email, receive_notifications):
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table('Exam_Learning_Users')
-        table.put_item(Item={
-            'user_id': str(username),
-            'email': str(email) if email else "",
-            'receive_notifications': bool(receive_notifications),
-            'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        })
+        table.update_item(
+            Key={'user_id': str(username)},
+            UpdateExpression="SET email = :e, receive_notifications = :n, updated_at = :u",
+            ExpressionAttributeValues={
+                ':e': str(email) if email else "",
+                ':n': bool(receive_notifications),
+                ':u': get_jst_now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+        )
     except Exception:
         pass
+
+def save_initial_check_completion(username, exam_code, result_dict):
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table('Exam_Learning_Users')
+        
+        profile = load_user_profile(username)
+        if profile is None:
+            raise Exception("AWSからユーザー情報を取得できませんでした。")
+            
+        initial_checks = profile.get("initial_checks", {})
+        initial_checks[exam_code] = result_dict
+        
+        table.update_item(
+            Key={'user_id': str(username)},
+            UpdateExpression="SET initial_checks = :ic, updated_at = :u",
+            ExpressionAttributeValues={
+                ':ic': initial_checks,
+                ':u': get_jst_now().strftime('%Y-%m-%d %H:%M:%S')
+            }
+        )
+    except Exception as e:
+        st.error(f"完了状態の保存エラー: {e}")
+
+# 💡 バッチ保存用に大幅に最適化（1問ずつではなく、リストごと1つの箱にまとめて保存）
+def save_reminder_log(user_id, sent_at, remind_targets):
+    """
+    対象問題を1件ずつ保存するのではなく、1回のメール送信につき1つのログにまとめて保存し、
+    DynamoDBのスロットリング（無料枠エラー）を完全に防ぎます。
+    """
+    try:
+        dynamodb = get_dynamodb_resource()
+        table = dynamodb.Table('Exam_Learning_Reminder_Logs')
+        
+        # 必要なデータを辞書のリストに変換
+        formatted_targets = []
+        for t in remind_targets:
+            formatted_targets.append({
+                'exam_code': str(t['exam_code']),
+                'year': str(t['year']),
+                'question_id': Decimal(str(t['question_id'])),
+                'reminder_reason': str(t['reminder_reason']),
+                'predicted_retention_at_send': Decimal(str(t['predicted_retention_at_send'])),
+                'last_answer_at': str(t['last_answer_at']),
+                'last_is_correct': bool(t['last_is_correct']),
+                'last_confidence': str(t['last_confidence']),
+                'user_solve_count': Decimal(str(t['user_solve_count'])),
+                'days_since_last_answer': Decimal(str(t['days_since_last_answer']))
+            })
+            
+        item = {
+            'log_id': str(uuid.uuid4()), 
+            'user_id': str(user_id),
+            'sent_at': str(sent_at),
+            'total_reminded': Decimal(str(len(formatted_targets))),
+            'targets': formatted_targets
+        }
+        table.put_item(Item=item)
+    except Exception as e:
+        print(f"🚨 リマインドログの保存に失敗しました (user: {user_id}): {e}")

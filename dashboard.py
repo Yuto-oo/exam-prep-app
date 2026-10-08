@@ -60,7 +60,7 @@ def show_dashboard(questions, history, exam_code):
         
         needs_review = hist.get('needs_review', False)
         last_correct = hist.get('last_correct', None)
-        last_confidence = hist.get('last_confidence', '少し自信あり')
+        last_confidence = str(hist.get('last_confidence', '少し自信あり'))
         
         times = hist.get('times', [])
         avg_time = sum(times) / len(times) if times else None
@@ -76,10 +76,10 @@ def show_dashboard(questions, history, exam_code):
             status_label = "未解答"
         elif needs_review:
             review_count += 1
-            status_label = "要復習（薄れた記憶）"
+            status_label = "推定保持率40%以下"
         else:
             mastered_count += 1
-            status_label = "定着（安全圏）"
+            status_label = "推定保持率40%超"
 
         if solve_count > 0:
             data_list.append({
@@ -96,24 +96,24 @@ def show_dashboard(questions, history, exam_code):
     c1, c2, c3, c4 = st.columns(4)
     with c1: st.metric("総出題対象問題数", f"{total_q} 問")
     with c2: st.metric("解答済み問題数", f"{len(df)} 問", f"{(len(df)/total_q)*100:.1f}% 着手")
-    with c3: st.metric("要復習問題数", f"{review_count} 問", delta=f"{review_count}問 要注意" if review_count > 0 else "問題なし", delta_color="inverse")
-    with c4: st.metric("平均記憶保持率", f"{df['retention_rate'].mean():.1f}%" if not df.empty else "0%", f"総ログ: {global_stats.get('total_logs', 0)} 件")
+    with c3: st.metric("推定要復習問題数", f"{review_count} 問", delta=f"{review_count}問 該当" if review_count > 0 else "該当なし", delta_color="inverse")
+    with c4: st.metric("平均推定記憶保持率", f"{df['retention_rate'].mean():.1f}%" if not df.empty else "0%", f"総ログ: {global_stats.get('total_logs', 0)} 件")
 
     st.write("---")
 
     col_left, col_right = st.columns(2)
     with col_left:
         st.subheader("📊 学習進捗ステータス")
-        status_df = pd.DataFrame({"ステータス": ["未解答", "要復習", "定着"], "問題数": [unanswered_count, review_count, mastered_count]})
-        fig_pie = px.pie(status_df, names="ステータス", values="問題数", hole=0.45, color="ステータス", color_discrete_map={"未解答": "#9E9E9E", "要復習": "#FF7043", "定着": "#66BB6A"})
+        status_df = pd.DataFrame({"ステータス": ["未解答", "推定保持率40%以下", "推定保持率40%超"], "問題数": [unanswered_count, review_count, mastered_count]})
+        fig_pie = px.pie(status_df, names="ステータス", values="問題数", hole=0.45, color="ステータス", color_discrete_map={"未解答": "#9E9E9E", "推定保持率40%以下": "#FF7043", "推定保持率40%超": "#66BB6A"})
         fig_pie.update_layout(margin=dict(t=20, b=20, l=20, r=20), height=280, legend=dict(orientation="h", y=-0.1))
         st.plotly_chart(fig_pie, use_container_width=True)
 
     with col_right:
-        st.subheader("🧠 記憶保持率の分布")
+        st.subheader("🧠 推定記憶保持率の分布")
         if not df.empty and df["retention_rate"].notna().any():
             fig_hist = px.histogram(df, x="retention_rate", nbins=10, color_discrete_sequence=["#26A69A"])
-            fig_hist.update_layout(xaxis_title="記憶保持率 (%)", yaxis_title="問題数", xaxis_range=[0, 100], margin=dict(t=20, b=20, l=20, r=20), height=280)
+            fig_hist.update_layout(xaxis_title="推定記憶保持率 (%)", yaxis_title="問題数", xaxis_range=[0, 100], margin=dict(t=20, b=20, l=20, r=20), height=280)
             st.plotly_chart(fig_hist, use_container_width=True)
         else:
             st.info("データが十分にありません。")
@@ -123,11 +123,14 @@ def show_dashboard(questions, history, exam_code):
     if not df.empty:
         def classify_gap(row):
             is_corr = row["last_correct"] == 1
-            is_confident = "自信あり" in row["last_confidence"] or "少し自信あり" in row["last_confidence"]
-            if is_confident and is_corr: return "🟢 自信あり × 正解 (完全理解)"
-            elif not is_confident and is_corr: return "🟡 自信なし × 正解 (まぐれ・無意識)"
-            elif not is_confident and not is_corr: return "🔵 自信なし × 誤答 (実力通り)"
-            else: return "🚨 自信あり × 誤答 (思い込み・最重要弱点)"
+            conf_str = str(row["last_confidence"])
+            # 💡 「少し自信あり」を除外し、「自信あり」の完全一致のみに変更
+            is_confident = conf_str == "自信あり"
+            
+            if is_confident and is_corr: return "🟢 高確信正答"
+            elif not is_confident and is_corr: return "🟡 低確信正答"
+            elif not is_confident and not is_corr: return "🔵 低確信誤答"
+            else: return "🚨 高確信誤答"
 
         df["gap_status"] = df.apply(classify_gap, axis=1)
         gap_counts = df["gap_status"].value_counts().reset_index()
@@ -136,16 +139,16 @@ def show_dashboard(questions, history, exam_code):
         col_gap1, col_gap2 = st.columns([3, 2])
         with col_gap1:
             fig_gap = px.pie(gap_counts, names="ステータス", values="問題数", hole=0.4, color="ステータス",
-                             color_discrete_map={"🟢 自信あり × 正解 (完全理解)": "#66BB6A", "🟡 自信なし × 正解 (まぐれ・無意識)": "#FFCA28", "🔵 自信なし × 誤答 (実力通り)": "#42A5F5", "🚨 自信あり × 誤答 (思い込み・最重要弱点)": "#EF5350"})
+                             color_discrete_map={"🟢 高確信正答": "#66BB6A", "🟡 低確信正答": "#FFCA28", "🔵 低確信誤答": "#42A5F5", "🚨 高確信誤答": "#EF5350"})
             fig_gap.update_layout(margin=dict(t=10, b=10, l=10, r=10), height=280)
             st.plotly_chart(fig_gap, use_container_width=True)
         with col_gap2:
-            trick_cnt = df[df["gap_status"] == "🚨 自信あり × 誤答 (思い込み・最重要弱点)"].shape[0]
+            trick_cnt = df[df["gap_status"] == "🚨 高確信誤答"].shape[0]
             st.markdown("##### 💡 メタ認知アドバイス")
             if trick_cnt > 0:
-                st.warning(f"⚠️ **「わかったつもり」問題が {trick_cnt} 問あります！**\n自信満々で間違えた問題は、解説の読み込みが浅い、または根本的な勘違いの恐れがあります。最優先で復習しましょう。")
+                st.warning(f"⚠️ **高確信誤答が {trick_cnt} 問あります。**\n解説や関連知識を再確認する候補として活用してください。")
             else:
-                st.success("✨ 素晴らしいメタ認知力です！自分の実力と自信が正しく一致しています。")
+                st.success("✨ 現在、高確信誤答はありません。")
 
     st.write("---")
     st.subheader("🔥 試験全体の要注意問題ランキング (クラス統計)")
@@ -169,7 +172,7 @@ def show_dashboard(questions, history, exam_code):
         if rank_data:
             rdf = pd.DataFrame(rank_data)
             
-            st.markdown("💀 **正解率が低い「難問」Top 5**")
+            st.markdown("💀 **正答率が低い問題 Top 5**")
             diff_df = rdf[rdf["全解答数"] > 0].sort_values(by="正解率", ascending=True).head(5)
             if not diff_df.empty:
                 st.dataframe(diff_df[["問題キー", "分野", "正解率"]].style.format({"正解率": "{:.1f}%"}), hide_index=True, use_container_width=True)
@@ -177,7 +180,7 @@ def show_dashboard(questions, history, exam_code):
                 st.info("データなし")
                 
             st.write("")
-            st.markdown("🪤 **皆の引っかかりやすい「おとり問題」Top 5**")
+            st.markdown("🪤 **高確信誤答が多い問題 Top 5**")
             trick_df = rdf[rdf["全解答数"] > 0].sort_values(by="おとり度(自信誤答)", ascending=False).head(5)
             if not trick_df.empty:
                 st.dataframe(trick_df[["問題キー", "分野", "おとり度(自信誤答)"]], hide_index=True, use_container_width=True)

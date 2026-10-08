@@ -1,0 +1,132 @@
+{
+  "version": "1.1",
+  "IP": {
+    "initial_check": {
+      "set_id": "IP_initial_v1",
+      "questions": [
+        {
+          "year": "IP3",
+          "id": 36
+        },
+        {
+          "year": "IP3",
+          "id": 74
+        },
+        {
+          "year": "IP4",
+          "id": 15
+        },
+        {
+          "year": "IP4",
+          "id": 59
+        },
+        {
+          "year": "IP5",
+          "id": 8
+        },
+        {
+          "year": "IP5",
+          "id": 41
+        },
+        {
+          "year": "IP6",
+          "id": 37
+        },
+        {
+          "year": "IP6",
+          "id": 90
+        },
+        {
+          "year": "IP7",
+          "id": 85
+        },
+        {
+          "year": "IP8",
+          "id": 6
+        }
+      ]
+    },
+    "ability_test": {
+      "mode": "conditional_random",
+      "rule_id": "IP_ability_random_v1",
+      "question_count": 10,
+      "exclude_initial_check": true,
+      "prefer_unanswered": true,
+      "balance_fields": [
+        "category_large",
+        "difficulty",
+        "question_type"
+      ]
+    }
+  },
+  "FEA": {
+    "initial_check": {
+      "set_id": "FEA_initial_v1",
+      "questions": [
+        {
+          "year": "FEA5",
+          "id": 1
+        },
+        {
+          "year": "FEA5",
+          "id": 14
+        },
+        {
+          "year": "FEA6",
+          "id": 19
+        },
+        {
+          "year": "FEA7",
+          "id": 3
+        },
+        {
+          "year": "FEA7",
+          "id": 8
+        }
+      ]
+    },
+    "ability_test": {
+      "mode": "conditional_random",
+      "rule_id": "FEA_ability_random_v1",
+      "question_count": 5,
+      "exclude_initial_check": true,
+      "prefer_unanswered": true,
+      "balance_fields": [
+        "category_large",
+        "difficulty",
+        "question_type"
+      ]
+    }
+  },
+  "FEB": {
+    "initial_check": {
+      "set_id": "FEB_initial_v1",
+      "questions": [
+        {
+          "year": "FEB5",
+          "id": 2
+        },
+        {
+          "year": "FEB6",
+          "id": 6
+        },
+        {
+          "year": "FEB7",
+          "id": 1
+        }
+      ]
+    },
+    "ability_test": {
+      "mode": "conditional_random",
+      "rule_id": "FEB_ability_random_v1",
+      "question_count": 3,
+      "exclude_initial_check": true,
+      "prefer_unanswered": true,
+      "balance_fields": [
+        "category_large",
+        "difficulty",
+        "question_type"
+      ]
+    }
+  }
+}

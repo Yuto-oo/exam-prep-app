@@ -3,8 +3,15 @@ import json
 import os
 import random
 import time
+import uuid
 import boto3
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+
+def get_jst_now():
+    """常に日本時間(JST)の現在時刻を返す関数"""
+    JST = timezone(timedelta(hours=+9), 'JST')
+    return datetime.now(JST).replace(tzinfo=None)
+
 from dotenv import load_dotenv
 import streamlit as st
 
@@ -14,7 +21,8 @@ from aws_db import (
     clear_suspend_state_in_aws,
     load_bookmarks_from_aws,
     load_user_profile,
-    save_user_profile
+    save_user_profile,
+    save_initial_check_completion
 )
 from dashboard import show_dashboard
 from quiz_page import show_quiz_page
@@ -43,6 +51,12 @@ if 'is_over_time' not in st.session_state: st.session_state.is_over_time = False
 if 'email' not in st.session_state: st.session_state.email = ""
 if 'receive_notifications' not in st.session_state: st.session_state.receive_notifications = True
 
+# 💡 研究用ログ保存のための追加ステート
+if 'activity_type' not in st.session_state: st.session_state.activity_type = "free_learning"
+if 'test_run_id' not in st.session_state: st.session_state.test_run_id = ""
+if 'test_set_id' not in st.session_state: st.session_state.test_set_id = ""
+if 'test_attempt_no' not in st.session_state: st.session_state.test_attempt_no = 1
+
 
 # ==========================================
 # 管理者へのフィードバック送信関数
@@ -57,7 +71,6 @@ def send_feedback_to_admin(user_id, issue_type, details, question_info=""):
             aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
         )
         
-        # 送信元・送信先ともにアプリのメアドを指定
         SENDER = "学習アプリ フィードバック機能 <exam.app.noreply@gmail.com>"
         RECEIVER = "exam.app.noreply@gmail.com"
         
@@ -88,24 +101,28 @@ if st.session_state.user_name is None:
     st.title("🛡️ ログイン")
 
     with st.form("login_form"):
-        input_name = st.text_input("名前 / 学籍番号")
-        input_email = st.text_input("メールアドレス（リマインド通知用・任意）")
-        input_level = st.selectbox("現在のあなたの知識レベル", ["初学者（当アプリのみを利用している方）", "中級者（他の勉強アプリ・サイトを同時に利用している方）", "上級者（合格レベル）"])
+        st.info("💡 卒業研究への参加者は、Discord等で配布された研究用ID（例：P001）を入力してください。\n⚠️ 氏名や学籍番号ではなく、配布された研究用IDを必ず使用してください。")
+        input_name = st.text_input("研究用ID")
+        
+        input_level = st.selectbox("現在のあなたの知識レベル", [
+            "初学者（IT知識や資格学習経験が少ない）", 
+            "中級者（基礎的なIT知識があり、資格学習や問題演習の経験がある）", 
+            "上級者（幅広いIT知識があり、十分に学習を重ねており、資格試験の合格水準に近い）"
+        ])
         input_password = st.text_input("クラス共通パスワード", type="password")
         
         st.markdown("---")
         
-        # 💡 チェックボックスの直前に配置し、最初は閉じた状態（expanded=False）にする
         with st.expander("📖 【必読】本アプリのご利用・実験参加に関する同意事項と使い方", expanded=False):
             st.markdown("""
             #### 【重要】本アプリのご利用・実験参加に関する同意事項
             本アプリは、大学の情報工学における卒業研究のための実証実験として提供されています。ご利用の前に、以下の項目をご一読いただき、同意の上で学習を開始してください。
             
             **1. データの収集とプライバシー保護について**  
-            本アプリでは、学習効果の測定およびシステムのユーザビリティ評価を目的として、以下のデータを収集・保存します。
+            本アプリでは、学習状態・学習行動の分析およびシステムのユーザビリティ評価を目的として、以下のデータを収集・保存します。
             
             * **アカウントおよび属性情報**
-              * 入力された名前（または学籍番号）
+              * 研究用ID（アンケート等で取得した氏名と対応付けて管理します）
               * 任意登録のメールアドレス（リマインド通知用）
               * 選択した「現在の知識レベル」
             * **学習・解答プロセスに関するデータ**
@@ -117,11 +134,12 @@ if st.session_state.user_name is None:
               * アプリへのアクセス日時、学習の中断・再開ログ、ブックマーク履歴
               * フィードバックフォームから送信された報告内容（解説の誤り指摘、バグ報告等）
             
-            収集したデータは厳重に管理し、卒業論文の執筆および学術発表の目的のみに使用します。外部へのデータ提供は一切行わず、論文等で発表する際は個人が特定できないよう完全に匿名化して統計処理を行います。
+            収集したデータは厳重に管理し、卒業論文の執筆および学術発表の目的のみに使用します。外部へのデータ提供は一切行わず、論文等で発表する際は個人が特定されない形で集計・公表します。
+            **本研究では、正誤・自信度・解答時間・回答履歴などの学習ログを収集し、学習状態の変化や学習支援への活用可能性を分析します。**
             
             **2. AI（生成AI）による解説の免責事項について**  
-            本アプリに収録されている問題文と正答はIPA（情報処理推進機構）の公式過去問に準拠していますが、**「問題の解説文」は複数のLLM（大規模言語モデル）を用いて自動生成された独自の文章**です。  
-            AIの性質上、解説内に不正確な情報（ハルシネーション）や不自然な日本語が含まれる可能性があります。本実験は「AIの生成した解説が学習にどう影響するか」の検証も兼ねているため、解説の完全な正確性を保証するものではないことをあらかじめご了承ください。
+            本アプリに収録されている問題文と正答はIPA（情報処理推進機構）の公式過去問に準拠していますが、**「問題の解説文」には複数のLLM（大規模言語モデル）を利用して作成した独自の文章が含まれます**。  
+            AI生成文章のため不正確な内容（ハルシネーション）や不自然な日本語が含まれる可能性があることをあらかじめご了承ください。
             
             **3. 参加の任意性と通知の停止（オプトアウト）について**  
             本実験への参加は完全に任意であり、成績や単位等には一切影響しません。  
@@ -129,16 +147,16 @@ if st.session_state.user_name is None:
             
             ---
             
-            #### 💡 学習効率を最大化するためのアプリの使い方
-            本アプリは、単に過去問を解くだけでなく、脳の記憶メカニズムを活用して「最も効率の良いタイミング」で復習ができるよう設計されています。
+            #### 💡 効率的な学習を支援するためのアプリの使い方
+            本アプリは、単に過去問を解くだけでなく、忘却曲線を参考にした推定記憶保持率を用いて「復習の目安となるタイミング」で復習ができるよう設計されています。
             
             **機能1：解答時の「自信度（メタ認知）」の入力**  
             問題を解く際、単に選択肢を選ぶだけでなく「どのくらい自信を持って答えたか」を入力してください。
-            * **当てずっぽうで正解した場合**：まぐれ当たりと判定され、早めに復習に回されます。
-            * **自信満々で間違えた場合**：思い込みによる危険な状態と判定され、最優先の復習対象として即座にピックアップされます。
+            * **勘で正解した場合**：低い自信度での正答と判定され、早めに復習に回されます。
+            * **自信ありで間違えた場合**：高い自信度での誤答（思い込み）と判定され、最優先の復習対象として即座にピックアップされます。
             
             **機能2：忘却曲線ベースの「自動リマインドメール」**  
-            過去の解答履歴と自信度から、システムがあなたの「記憶保持率」を裏側で計算し続けます。記憶が薄れ、保持率が40%を下回った問題が発生した日の朝8時にのみ、登録されたメールアドレス宛てにリマインドが自動送信されます。
+            過去の解答履歴と自信度から、システムがあなたの「推定記憶保持率」を裏側で計算し続けます。記憶が薄れて「推定記憶保持率が40%を下回った問題」や「自信ありで間違えた危険な問題」があると、朝8時と夜20時（1日2回）にリマインドメールが届きます。
             
             **機能3：研究へのご協力「フィードバック機能」**  
             学習中、「AIの解説が明らかにおかしい」「システムがフリーズした」などの問題を見つけた場合は、画面左側のメニュー（💬 バグ・問題の解説ミスを報告する）からご報告をお願いします。
@@ -149,7 +167,7 @@ if st.session_state.user_name is None:
         
         if submit_btn:
             if not input_name: 
-                st.warning("⚠️ 名前を入力してください。")
+                st.warning("⚠️ 研究用IDを入力してください。")
             elif not agree_checkbox:
                 st.warning("⚠️ 実験に参加するには、利用規約への同意が必要です。上のチェックボックスにチェックを入れてください。")
             elif input_password != os.getenv('APP_PASSWORD', 'Exam_Learning'): 
@@ -162,14 +180,14 @@ if st.session_state.user_name is None:
                 
                 with st.spinner("☁️ AWSから過去の学習データと中断データを同期しています..."):
                     profile = load_user_profile(input_name)
-                    final_email = input_email if input_email else profile.get('email', '')
                     
-                    if input_email and not profile.get('email'):
-                        final_notif = True
-                    else:
-                        final_notif = profile.get('receive_notifications', True)
-                        
-                    save_user_profile(input_name, final_email, final_notif)
+                    if profile is None:
+                        st.error("🚨 AWSからユーザー情報を取得できませんでした。")
+                        st.stop()
+                    
+                    final_email = profile.get('email', '')
+                    final_notif = profile.get('receive_notifications', True)
+
                     st.session_state.email = final_email
                     st.session_state.receive_notifications = final_notif
 
@@ -218,7 +236,23 @@ def load_data(exam_code):
         else: q["question_type"] = "知識問題"
     return data
 
+@st.cache_data
+def load_assessment_sets():
+    """初回確認テスト・任意実力テストの条件用JSONをロード"""
+    if os.path.exists("assessment_sets.json"):
+        try:
+            with open("assessment_sets.json", "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
 questions = load_data(st.session_state.exam_code)
+
+# 💡 安全にログアウトを実行するためのコールバック関数
+def do_logout():
+    st.session_state.clear()
+
 
 # --- 👤 3. メインサイドバーメニュー ---
 st.sidebar.title(f"👤 メニュー")
@@ -227,19 +261,33 @@ app_mode = st.sidebar.radio("📋 機能を切り替える", ["クイズ学習",
 if st.session_state.user_name:
     st.sidebar.markdown("---")
     st.sidebar.subheader("🔔 通知設定")
-    st.sidebar.caption("※試験合格後など、リマインド通知を停止したい場合はチェックを外してください。")
+    st.sidebar.caption("※リマインド通知用のメールアドレス登録・変更はこちらで行えます。通知を停止したい場合はチェックを外してください。")
     
+    current_email = st.session_state.get('email', '')
     current_notif = st.session_state.get('receive_notifications', True)
-    new_notif = st.sidebar.checkbox("学習リマインド通知を受け取る", value=current_notif, key="notif_checkbox")
-    
-    if new_notif != current_notif:
-        st.session_state.receive_notifications = new_notif
-        save_user_profile(st.session_state.user_name, st.session_state.email, new_notif)
-        st.sidebar.success("✅ 通知設定を更新しました")
 
-    # ==========================================
-    # フィードバック報告フォームUI
-    # ==========================================
+    if current_email:
+        st.sidebar.caption("現在の状態: **✅ アドレス登録済み**")
+    else:
+        st.sidebar.caption("現在の状態: **❌ アドレス未登録**")
+
+    with st.sidebar.form("notification_form"):
+        new_email = st.text_input("新しいメールアドレス（変更・登録時のみ入力）", value="")
+        new_notif = st.checkbox("学習リマインド通知を受け取る", value=current_notif)
+        
+        submit_notif = st.form_submit_button("更新する")
+
+    if submit_notif:
+        final_email = new_email.strip() if new_email.strip() else current_email
+        st.session_state.email = final_email
+        st.session_state.receive_notifications = new_notif
+        save_user_profile(st.session_state.user_name, final_email, new_notif)
+        
+        # 💡 修正点：メッセージを見せるために1.5秒待機してからリロードする
+        st.sidebar.success("✅ 通知設定を更新しました")
+        time.sleep(1.5)
+        st.rerun()
+
     st.sidebar.markdown("---")
     with st.sidebar.expander("💬 バグ・問題の解説ミスを報告する"):
         with st.form("feedback_form", clear_on_submit=True):
@@ -262,9 +310,9 @@ if st.session_state.user_name:
                     else:
                         st.error("送信に失敗しました。時間をおいて再度お試しください。")
 
-if st.sidebar.button("ログアウト"): 
-    st.session_state.clear()
-    st.rerun()
+# 💡 ログアウト時にエラーが起きないよう、on_clickで安全に状態をクリアする
+if st.sidebar.button("ログアウト", on_click=do_logout): 
+    pass
 
 
 # --- 📊 4. ダッシュボード表示モード ---
@@ -280,24 +328,38 @@ if not st.session_state.config_done:
     if st.button("🔄 前回の続きから", use_container_width=True):
         if st.session_state.suspended and st.session_state.saved_session:
             ss = st.session_state.saved_session
-            st.session_state.exam_code = ss['exam_code']
             
-            exam_options = {"FEA": "基本情報技術者試験A", "FEB": "基本情報技術者試験B", "IP": "ITパスポート"}
-            st.session_state.exam_name = exam_options.get(ss['exam_code'], "基本情報技術者試験A")
-            
-            all_q = load_data(ss['exam_code'])
-            
-            restored_qs = []
-            for sq in ss['q_keys']:
-                match = next((q for q in all_q if q.get('year') == sq['year'] and int(q.get('id', 0)) == int(sq['id'])), None)
-                if match: restored_qs.append(match)
-            
-            st.session_state.quiz_questions = restored_qs
-            st.session_state.current_index = int(ss['current_index'])
-            st.session_state.config_done = True
-            st.session_state.is_over_time = False 
-            st.session_state.start_time = time.time()
-            st.rerun()
+            saved_activity = ss.get('activity_type')
+            if saved_activity in ['initial_check', 'ability_test'] or saved_activity is None:
+                st.warning("⚠️ 初回確認テストおよび実力テストは中断からの再開ができません。過去のテストデータは破棄されました。下のボタンから最初からやり直してください。")
+                clear_suspend_state_in_aws(st.session_state.user_name)
+                st.session_state.suspended = False
+                st.session_state.saved_session = None
+            else:
+                st.session_state.exam_code = ss['exam_code']
+                
+                exam_options = {"FEA": "基本情報技術者試験A", "FEB": "基本情報技術者試験B", "IP": "ITパスポート"}
+                st.session_state.exam_name = exam_options.get(ss['exam_code'], "基本情報技術者試験A")
+                
+                all_q = load_data(ss['exam_code'])
+                
+                restored_qs = []
+                for sq in ss['q_keys']:
+                    match = next((q for q in all_q if q.get('year') == sq['year'] and int(q.get('id', 0)) == int(sq['id'])), None)
+                    if match: restored_qs.append(match)
+                
+                st.session_state.quiz_questions = restored_qs
+                st.session_state.current_index = int(ss['current_index'])
+                
+                st.session_state.activity_type = saved_activity
+                st.session_state.test_run_id = ss.get('test_run_id', '')
+                st.session_state.test_set_id = ss.get('test_set_id', '')
+                st.session_state.test_attempt_no = ss.get('test_attempt_no', 1)
+                
+                st.session_state.config_done = True
+                st.session_state.is_over_time = False 
+                st.session_state.start_time = time.time()
+                st.rerun()
         else:
             st.warning("前回の中断ポイントがありません。")
 
@@ -374,26 +436,159 @@ if not st.session_state.config_done:
         else:
             max_questions = st.slider("出題問題数", 1, total_count, total_count)
             
-        if st.button("クイズを開始する 🚀", type="primary", use_container_width=True):
-            if selected_order == "ランダム": random.shuffle(temp_filtered)
-            st.session_state.quiz_questions = temp_filtered[:max_questions]
-            st.session_state.config_done = True
-            st.session_state.current_index = 0
-            st.session_state.score = 0
-            st.session_state.answered = False
+        st.write("---")
+        
+        profile = load_user_profile(st.session_state.user_name)
+        
+        if profile is None:
+            st.error("🚨 AWSからユーザー情報を取得できませんでした。")
+            st.stop()
             
-            st.session_state.suspended = False
-            st.session_state.saved_session = None
-            st.session_state.is_over_time = False 
-            clear_suspend_state_in_aws(st.session_state.user_name)
+        initial_checks = profile.get("initial_checks", {})
+        is_initial_completed = initial_checks.get(st.session_state.exam_code, {}).get("completed", False)
+        
+        if not is_initial_completed:
+            st.warning(f"⚠️ 【{current_exam_name}】の初回確認テストが未完了です。")
+            st.info("※全問解答後に通常の自由学習が利用可能になります。（上の出題設定は無視され、固定問題が出題されます）")
             
-            st.session_state.start_time = time.time()
-            st.rerun()
+            if st.button("初回確認テストを開始する 🚀", type="primary", use_container_width=True):
+                sets = load_assessment_sets()
+                exam_set = sets.get(st.session_state.exam_code, {})
+                initial_set = exam_set.get("initial_check", {})
+                target_q_refs = initial_set.get("questions", [])
+                
+                test_qs = []
+                for ref in target_q_refs:
+                    match = next((q for q in questions if q.get('year') == ref.get('year') and int(q.get('id', 0)) == int(ref.get('id'))), None)
+                    if match:
+                        test_qs.append(match)
+                        
+                if not test_qs:
+                    st.error("初回確認テストの問題が assessment_sets.json から見つかりません。")
+                    st.stop()
+                    
+                st.session_state.quiz_questions = test_qs
+                st.session_state.config_done = True
+                st.session_state.current_index = 0
+                st.session_state.score = 0
+                st.session_state.answered = False
+                st.session_state.suspended = False
+                st.session_state.saved_session = None
+                st.session_state.is_over_time = False 
+
+                st.session_state.activity_type = "initial_check"
+                st.session_state.test_run_id = uuid.uuid4().hex
+                st.session_state.test_set_id = initial_set.get("set_id", f"{st.session_state.exam_code}_initial_v1")
+                st.session_state.test_attempt_no = 1
+                
+                st.session_state.start_time = time.time()
+                st.rerun()
+        else:
+            if st.button("クイズを開始する 🚀", type="primary", use_container_width=True):
+                if selected_order == "ランダム": random.shuffle(temp_filtered)
+                st.session_state.quiz_questions = temp_filtered[:max_questions]
+                st.session_state.config_done = True
+                st.session_state.current_index = 0
+                st.session_state.score = 0
+                st.session_state.answered = False
+                
+                st.session_state.suspended = False
+                st.session_state.saved_session = None
+                st.session_state.is_over_time = False 
+                clear_suspend_state_in_aws(st.session_state.user_name)
+                
+                st.session_state.activity_type = "free_learning"
+                st.session_state.test_run_id = ""
+                st.session_state.test_set_id = ""
+                st.session_state.test_attempt_no = 1
+                
+                st.session_state.start_time = time.time()
+                st.rerun()
+                
+            with st.expander("🎯 任意実力テストを受験する (補助機能)"):
+                st.info("※初回確認テスト以外の問題から、ランダムで実力テストを出題します。")
+                
+                if st.button("実力テストを開始する 🚀", use_container_width=True):
+                    sets = load_assessment_sets()
+                    ability_set = sets.get(st.session_state.exam_code, {}).get("ability_test", {})
+                    req_count = ability_set.get("question_count", 5)
+                    balance_fields = ability_set.get("balance_fields", ["category_large", "difficulty", "question_type"])
+                    
+                    initial_refs = sets.get(st.session_state.exam_code, {}).get("initial_check", {}).get("questions", [])
+                    initial_keys = [f"{r.get('year')}_{r.get('id')}" for r in initial_refs]
+                    
+                    candidates = [q for q in questions if f"{q.get('year')}_{q.get('id')}" not in initial_keys]
+                    
+                    unanswered = []
+                    answered = []
+                    for q in candidates:
+                        q_key = f"{st.session_state.exam_code}_{q.get('year')}_{q.get('id')}"
+                        if st.session_state.history.get(q_key, {}).get('solve_count', 0) == 0:
+                            unanswered.append(q)
+                        else:
+                            answered.append(q)
+                            
+                    def select_balanced_questions(candidates_pool, needed_count, current_selected):
+                        selected = []
+                        pool = candidates_pool.copy()
+                        while len(selected) < needed_count and pool:
+                            all_selected = current_selected + selected
+                            counts = {f: {} for f in balance_fields}
+                            for sq in all_selected:
+                                for f in balance_fields:
+                                    val = str(sq.get(f, "Unknown"))
+                                    counts[f][val] = counts[f].get(val, 0) + 1
+                            
+                            min_score = float('inf')
+                            best_candidates = []
+                            for q in pool:
+                                score = 0
+                                for f in balance_fields:
+                                    val = str(q.get(f, "Unknown"))
+                                    score += counts[f].get(val, 0)
+                                
+                                if score < min_score:
+                                    min_score = score
+                                    best_candidates = [q]
+                                elif score == min_score:
+                                    best_candidates.append(q)
+                            
+                            chosen = random.choice(best_candidates)
+                            selected.append(chosen)
+                            pool.remove(chosen)
+                        return selected
+
+                    selected_qs = []
+                    if len(unanswered) > 0:
+                        needed = min(req_count, len(unanswered))
+                        selected_qs.extend(select_balanced_questions(unanswered, needed, selected_qs))
+                    
+                    if len(selected_qs) < req_count and len(answered) > 0:
+                        needed = req_count - len(selected_qs)
+                        selected_qs.extend(select_balanced_questions(answered, needed, selected_qs))
+                    
+                    st.session_state.quiz_questions = selected_qs
+                    st.session_state.config_done = True
+                    st.session_state.current_index = 0
+                    st.session_state.score = 0
+                    st.session_state.answered = False
+                    st.session_state.suspended = False
+                    st.session_state.saved_session = None
+                    st.session_state.is_over_time = False 
+
+                    st.session_state.activity_type = "ability_test"
+                    st.session_state.test_run_id = uuid.uuid4().hex
+                    st.session_state.test_set_id = ability_set.get("rule_id", f"{st.session_state.exam_code}_ability_random_v1")
+                    st.session_state.test_attempt_no = 1
+                    
+                    st.session_state.start_time = time.time()
+                    st.rerun()
+
     else:
         st.warning("⚠️ 選択した条件に合致する問題がありません。絞り込みを緩めてください。")
         
     st.write("---")
-    st.caption("※ 本アプリの問題文・解答例はIPA（情報処理推進機構）の公表資料を利用しています。  \n※ 解説文はLLM（AI）により自動生成された独自コンテンツです。")
+    st.caption("※ 本アプリの問題文・正答はIPA（情報処理推進機構）の公表資料を利用しています。  \n※ 解説文はLLM（AI）により自動生成された独自コンテンツです。")
     
     st.stop()
 
@@ -402,6 +597,28 @@ if not st.session_state.config_done:
 if st.session_state.finished:
     st.title("🎊 学習完了！")
     st.markdown(f"### 今回の成果: **{st.session_state.score} / {len(st.session_state.quiz_questions)}** 問正解")
+    
+    if st.session_state.get("activity_type") == "initial_check":
+        profile = load_user_profile(st.session_state.user_name)
+        
+        if profile is None:
+            st.error("🚨 AWSからユーザー情報を取得できませんでした。")
+            st.stop()
+            
+        initial_checks = profile.get("initial_checks", {})
+        
+        if not initial_checks.get(st.session_state.exam_code, {}).get("completed"):
+            result_dict = {
+                "completed": True,
+                "completed_at": get_jst_now().strftime('%Y-%m-%d %H:%M:%S'),
+                "completed_run_id": st.session_state.test_run_id,
+                "test_set_id": st.session_state.test_set_id,
+                "score": st.session_state.score,
+                "total": len(st.session_state.quiz_questions)
+            }
+            save_initial_check_completion(st.session_state.user_name, st.session_state.exam_code, result_dict)
+            st.success("🎉 初回確認テストが完了しました！次回から自由学習が利用できます。")
+
     if st.button("トップへ戻り、もう一度設定する", use_container_width=True, type="primary"): 
         st.session_state.config_done = False
         st.session_state.finished = False
