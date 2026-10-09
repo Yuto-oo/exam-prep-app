@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 import os
 import boto3
+import math
+import uuid
+from decimal import Decimal
 from datetime import datetime, timezone, timedelta
 from boto3.dynamodb.conditions import Key
 
@@ -16,10 +19,6 @@ try:
 except ImportError:
     pass
 
-# srs_logicから忘却曲線アルゴリズムを拝借
-from srs_logic import evaluate_history_retention
-from aws_db import save_reminder_log
-
 def get_boto3_session():
     return boto3.Session(
         region_name=os.getenv('AWS_REGION'),
@@ -27,8 +26,102 @@ def get_boto3_session():
         aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
     )
 
+# ==========================================
+# srs_logic.py から統合（忘却曲線の計算ロジック）
+# ==========================================
+def calculate_retention_and_days(last_timestamp_str, streak, last_correct, last_confidence, target_rate=40.0):
+    if not last_timestamp_str: return 0.0, 0.0
+    try:
+        last_time = datetime.strptime(last_timestamp_str, '%Y-%m-%d %H:%M:%S')
+        now = get_jst_now()
+        delta = now - last_time
+        t_actual = max(0.0, delta.total_seconds() / 86400.0)
+        
+        base_h = 1.0
+        multiplier = 2.0
+        
+        if last_correct:
+            if last_confidence == "自信あり":
+                base_h = 4.4
+                multiplier = 1.8
+            elif last_confidence == "少し自信あり":
+                base_h = 3.3
+                multiplier = 1.5
+            else:
+                base_h = 0.45
+                multiplier = 1.1
+        else:
+            if last_confidence == "自信あり":
+                base_h = 0.14
+                multiplier = 1.0
+            elif last_confidence == "少し自信あり":
+                base_h = 0.27
+                multiplier = 1.0
+            else:
+                base_h = 0.5
+                multiplier = 1.0
+        
+        H = base_h * (multiplier ** max(0, streak))
+        retention = math.exp(-t_actual / H)
+        retention_pct = round(retention * 100, 1)
+        
+        target_r = target_rate / 100.0
+        t_target = -H * math.log(target_r)
+        days_until_review = round(t_target - t_actual, 1)
+        
+        return retention_pct, days_until_review
+    except Exception:
+        return 0.0, 0.0
+
+def evaluate_history_retention(history):
+    for q_key, data in history.items():
+        last_correct = data.get('last_correct', False)
+        last_confidence = data.get('last_confidence', '少し自信あり')
+        retention, days_until = calculate_retention_and_days(data['last_timestamp'], data['streak'], last_correct, last_confidence)
+        history[q_key]['retention'] = retention
+        history[q_key]['days_until_review'] = days_until
+        history[q_key]['needs_review'] = retention <= 40.0
+    return history
+
+# ==========================================
+# aws_db.py から統合（一括保存ロジック）
+# ==========================================
+def save_reminder_log(user_id, sent_at, remind_targets):
+    try:
+        session = get_boto3_session()
+        dynamodb = session.resource('dynamodb')
+        table = dynamodb.Table('Exam_Learning_Reminder_Logs')
+        
+        formatted_targets = []
+        for t in remind_targets:
+            formatted_targets.append({
+                'exam_code': str(t['exam_code']),
+                'year': str(t['year']),
+                'question_id': Decimal(str(t['question_id'])),
+                'reminder_reason': str(t['reminder_reason']),
+                'predicted_retention_at_send': Decimal(str(t['predicted_retention_at_send'])),
+                'last_answer_at': str(t['last_answer_at']),
+                'last_is_correct': bool(t['last_is_correct']),
+                'last_confidence': str(t['last_confidence']),
+                'user_solve_count': Decimal(str(t['user_solve_count'])),
+                'days_since_last_answer': Decimal(str(t['days_since_last_answer']))
+            })
+            
+        item = {
+            'log_id': str(uuid.uuid4()), 
+            'user_id': str(user_id),
+            'sent_at': str(sent_at),
+            'total_reminded': Decimal(str(len(formatted_targets))),
+            'targets': formatted_targets
+        }
+        table.put_item(Item=item)
+    except Exception as e:
+        print(f"🚨 リマインドログの保存に失敗しました (user: {user_id}): {e}")
+
+# ==========================================
+# メイン処理 (メール送信等のロジック)
+# ==========================================
 def get_all_users_to_notify():
-    """通知設定がONで、メアドが登録されているユーザーを取得"""
     session = get_boto3_session()
     dynamodb = session.resource('dynamodb')
     table = dynamodb.Table('Exam_Learning_Users')
@@ -42,7 +135,6 @@ def get_all_users_to_notify():
         return []
 
 def get_user_history_raw(username):
-    """Streamlitに依存せず純粋なPythonとして学習履歴を取得して忘却曲線を計算"""
     session = get_boto3_session()
     dynamodb = session.resource('dynamodb')
     table = dynamodb.Table('Exam_Learning_Logs')
@@ -80,7 +172,6 @@ def get_user_history_raw(username):
     return evaluate_history_retention(history)
 
 def send_email(ses_client, to_email, subject, body_text):
-    """SESを使用してメールを送信"""
     SENDER = "資格学習アプリ (送信専用) <exam.app.noreply@gmail.com>"
     
     try:
@@ -169,8 +260,6 @@ def main():
             if send_email(ses_client, email, subject, body):
                 print("   -> ✅ 送信成功！")
                 sent_at = get_jst_now().strftime('%Y-%m-%d %H:%M:%S')
-                
-                # 💡 修正点：1問ずつ保存するループをなくし、関数にリストごと渡す
                 save_reminder_log(user_id, sent_at, remind_targets)
         else:
             print(f"👍 {user_id} ({email}) は記憶が定着しており、復習対象の問題はありません。")
