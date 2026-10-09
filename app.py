@@ -212,8 +212,18 @@ if st.session_state.user_name is None:
 def load_data(exam_code):
     file_map = {"FEA": "FEA5-7_ALL_QA.json", "FEB": "FEB5-7_ALL_QA.json", "IP": "IP3-8_ALL_QA.json"}
     file_name = file_map.get(exam_code)
-    if not file_name or not os.path.exists(file_name): return []
-    with open(file_name, "r", encoding="utf-8") as f: data = json.load(f)
+    if not file_name: return []
+    
+    # 💡 パス解決を堅牢にする
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(base_dir, file_name)
+    
+    if not os.path.exists(file_path):
+        file_path = file_name # fallback
+        if not os.path.exists(file_path):
+            return []
+            
+    with open(file_path, "r", encoding="utf-8") as f: data = json.load(f)
     
     for q in data:
         opts = q.get("options", {})
@@ -236,15 +246,21 @@ def load_data(exam_code):
         else: q["question_type"] = "知識問題"
     return data
 
-@st.cache_data
+@st.cache_data(ttl=3600)
 def load_assessment_sets():
     """初回確認テスト・任意実力テストの条件用JSONをロード"""
-    if os.path.exists("assessment_sets.json"):
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(base_dir, "assessment_sets.json")
+    
+    target_path = file_path if os.path.exists(file_path) else "assessment_sets.json"
+    
+    if os.path.exists(target_path):
         try:
-            with open("assessment_sets.json", "r", encoding="utf-8") as f:
+            with open(target_path, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            st.error(f"⚠️ assessment_sets.json の読み込みに失敗しました: {e}")
+            return {}
     return {}
 
 questions = load_data(st.session_state.exam_code)
@@ -283,7 +299,6 @@ if st.session_state.user_name:
         st.session_state.receive_notifications = new_notif
         save_user_profile(st.session_state.user_name, final_email, new_notif)
         
-        # 💡 修正点：メッセージを見せるために1.5秒待機してからリロードする
         st.sidebar.success("✅ 通知設定を更新しました")
         time.sleep(1.5)
         st.rerun()
@@ -345,7 +360,8 @@ if not st.session_state.config_done:
                 
                 restored_qs = []
                 for sq in ss['q_keys']:
-                    match = next((q for q in all_q if q.get('year') == sq['year'] and int(q.get('id', 0)) == int(sq['id'])), None)
+                    # 💡 文字列比較に統一して安全に再開する
+                    match = next((q for q in all_q if str(q.get('year')) == str(sq['year']) and str(q.get('id', 0)) == str(sq['id'])), None)
                     if match: restored_qs.append(match)
                 
                 st.session_state.quiz_questions = restored_qs
@@ -453,18 +469,33 @@ if not st.session_state.config_done:
             
             if st.button("初回確認テストを開始する 🚀", type="primary", use_container_width=True):
                 sets = load_assessment_sets()
+                
+                # 💡 JSONファイル自体が読み込めていない場合のエラー
+                if not sets:
+                    st.error("🚨 設定ファイル (assessment_sets.json) が見つからないか、読み込めませんでした。カレントディレクトリにファイルが存在するか確認してください。")
+                    st.stop()
+                
                 exam_set = sets.get(st.session_state.exam_code, {})
                 initial_set = exam_set.get("initial_check", {})
                 target_q_refs = initial_set.get("questions", [])
                 
+                # 💡 指定された問題がない場合のエラー
+                if not target_q_refs:
+                    st.error(f"🚨 {current_exam_name} 用の初回確認テスト問題が assessment_sets.json 内に定義されていません。")
+                    st.stop()
+                
                 test_qs = []
                 for ref in target_q_refs:
-                    match = next((q for q in questions if q.get('year') == ref.get('year') and int(q.get('id', 0)) == int(ref.get('id'))), None)
+                    # 💡 安全のため、yearもidも文字列化（空白除去）して比較する
+                    ref_year = str(ref.get('year', '')).strip()
+                    ref_id = str(ref.get('id', '')).strip()
+                    match = next((q for q in questions if str(q.get('year', '')).strip() == ref_year and str(q.get('id', '')).strip() == ref_id), None)
                     if match:
                         test_qs.append(match)
                         
+                # 💡 取得できた問題が1問もない場合のエラー
                 if not test_qs:
-                    st.error("初回確認テストの問題が assessment_sets.json から見つかりません。")
+                    st.error(f"🚨 初回確認テストの問題がデータベースと一致しません。\n（指定された {len(target_q_refs)} 問中、取得できたのは {len(test_qs)} 問です）\nassessment_sets.jsonの 'year' と 'id' が正しいか確認してください。")
                     st.stop()
                     
                 st.session_state.quiz_questions = test_qs
@@ -510,14 +541,19 @@ if not st.session_state.config_done:
                 
                 if st.button("実力テストを開始する 🚀", use_container_width=True):
                     sets = load_assessment_sets()
+                    
+                    if not sets:
+                        st.error("🚨 設定ファイル (assessment_sets.json) が見つからないため実力テストを開始できません。")
+                        st.stop()
+                        
                     ability_set = sets.get(st.session_state.exam_code, {}).get("ability_test", {})
                     req_count = ability_set.get("question_count", 5)
                     balance_fields = ability_set.get("balance_fields", ["category_large", "difficulty", "question_type"])
                     
                     initial_refs = sets.get(st.session_state.exam_code, {}).get("initial_check", {}).get("questions", [])
-                    initial_keys = [f"{r.get('year')}_{r.get('id')}" for r in initial_refs]
+                    initial_keys = [f"{str(r.get('year', '')).strip()}_{str(r.get('id', '')).strip()}" for r in initial_refs]
                     
-                    candidates = [q for q in questions if f"{q.get('year')}_{q.get('id')}" not in initial_keys]
+                    candidates = [q for q in questions if f"{str(q.get('year', '')).strip()}_{str(q.get('id', '')).strip()}" not in initial_keys]
                     
                     unanswered = []
                     answered = []
