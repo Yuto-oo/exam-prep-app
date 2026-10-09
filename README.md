@@ -47,4 +47,8 @@ ITパスポートおよび基本情報技術者試験の学習をサポートし
 ├── requirements.txt             # 必要なPythonパッケージ一覧
 ├── research_analysis.py         # 卒業研究用 学習ログ集計・CSV出力スクリプト
 ├── send_daily_reminders.py      # 自動リマインドメール送信バッチ
+<<<<<<< HEAD
 └── srs_logic.py                 # 分散学習（Spaced Repetition System）推論ロジック
+=======
+└── srs_logic.py                 # 分散学習（Spaced Repetition System）推論ロジック
+>>>>>>> 763858eff0329cd6441c492bf0589807c911a1dd

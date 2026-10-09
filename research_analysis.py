@@ -62,6 +62,7 @@ def fetch_all_reminders():
         while 'LastEvaluatedKey' in response:
             response = table.scan(ExclusiveStartKey=response['LastEvaluatedKey'])
             items.extend(response.get('Items', []))
+<<<<<<< HEAD
             
         # 💡 新仕様（まとめて保存）と旧仕様（1問ずつ保存）の両方に対応させる展開処理
         flattened_items = []
@@ -83,6 +84,10 @@ def fetch_all_reminders():
                 
         print(f"✅ 計 {len(flattened_items)} 件のリマインド対象問題履歴を取得しました。")
         return flattened_items
+=======
+        print(f"✅ 計 {len(items)} 件のリマインド履歴を取得しました。")
+        return items
+>>>>>>> 763858eff0329cd6441c492bf0589807c911a1dd
     except Exception as e:
         print(f"⚠️ リマインド履歴テーブルが見つかりません（初回実行前等）: {e}")
         return []
