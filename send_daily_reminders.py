@@ -20,11 +20,8 @@ except ImportError:
     pass
 
 def get_boto3_session():
-    return boto3.Session(
-        region_name=os.getenv('AWS_REGION'),
-        aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-        aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY')
-    )
+    # 💡 修正ポイント：アクセスキー等を明示せず、boto3の自動取得機能（3点セット）に任せる
+    return boto3.Session(region_name=os.getenv('AWS_REGION', 'ap-northeast-1'))
 
 # ==========================================
 # srs_logic.py から統合（忘却曲線の計算ロジック）
@@ -265,7 +262,6 @@ def main():
             print(f"👍 {user_id} ({email}) は記憶が定着しており、復習対象の問題はありません。")
             
     print("=== 🎉 すべての送信処理が完了しました ===")
-
 
 # 💡 AWS Lambda 用のハンドラー関数
 def lambda_handler(event, context):
