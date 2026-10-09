@@ -362,10 +362,7 @@ def save_initial_check_completion(username, exam_code, result_dict):
         table = dynamodb.Table('Exam_Learning_Users')
         
         profile = load_user_profile(username)
-<<<<<<< HEAD
-=======
         # 💡 修正点：AWSから取得失敗時は保存処理を安全にストップする
->>>>>>> 763858eff0329cd6441c492bf0589807c911a1dd
         if profile is None:
             raise Exception("AWSからユーザー情報を取得できませんでした。")
             
@@ -383,21 +380,16 @@ def save_initial_check_completion(username, exam_code, result_dict):
     except Exception as e:
         st.error(f"完了状態の保存エラー: {e}")
 
-<<<<<<< HEAD
 # 💡 バッチ保存用に大幅に最適化（1問ずつではなく、リストごと1つの箱にまとめて保存）
 def save_reminder_log(user_id, sent_at, remind_targets):
     """
     対象問題を1件ずつ保存するのではなく、1回のメール送信につき1つのログにまとめて保存し、
     DynamoDBのスロットリング（無料枠エラー）を完全に防ぎます。
     """
-=======
-def save_reminder_log(log_data):
->>>>>>> 763858eff0329cd6441c492bf0589807c911a1dd
     try:
         dynamodb = get_dynamodb_resource()
         table = dynamodb.Table('Exam_Learning_Reminder_Logs')
         
-<<<<<<< HEAD
         # 必要なデータを辞書のリストに変換
         formatted_targets = []
         for t in remind_targets:
@@ -424,23 +416,3 @@ def save_reminder_log(log_data):
         table.put_item(Item=item)
     except Exception as e:
         print(f"🚨 リマインドログの保存に失敗しました (user: {user_id}): {e}")
-=======
-        item = {
-            'log_id': str(uuid.uuid4()), 
-            'user_id': str(log_data['user_id']),
-            'sent_at': str(log_data['sent_at']),
-            'exam_code': str(log_data['exam_code']),
-            'year': str(log_data['year']),
-            'question_id': Decimal(str(log_data['question_id'])),
-            'reminder_reason': str(log_data['reminder_reason']),
-            'predicted_retention_at_send': Decimal(str(log_data['predicted_retention_at_send'])),
-            'last_answer_at': str(log_data['last_answer_at']),
-            'last_is_correct': bool(log_data['last_is_correct']),
-            'last_confidence': str(log_data['last_confidence']),
-            'user_solve_count': Decimal(str(log_data['user_solve_count'])),
-            'days_since_last_answer': Decimal(str(log_data['days_since_last_answer']))
-        }
-        table.put_item(Item=item)
-    except Exception as e:
-        print(f"🚨 リマインドログの保存に失敗しました (user: {log_data.get('user_id')}): {e}")
->>>>>>> 763858eff0329cd6441c492bf0589807c911a1dd
